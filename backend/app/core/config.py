@@ -42,11 +42,10 @@ class Settings(BaseSettings):
     max_download_bytes: int = 8589934592
     keep_source_media: bool = False
 
-    # Network timeouts protect against an unresponsive provider. They are not
-    # generation limits; those are controlled by llm_max_output_tokens.
+    # Network timeouts protect against an unresponsive provider. Generation
+    # length is intentionally left to the configured LLM provider.
     llm_timeout_seconds: int = 300
     llm_max_chunk_chars: int = 12000
-    llm_max_output_tokens: int = 3000
 
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
 

@@ -44,23 +44,27 @@ class OpenAICompatibleLLM:
     def is_deepseek(self) -> bool:
         return self.config.provider == "deepseek" or "api.deepseek.com" in self.config.base_url
 
-    def complete(self, system: str, user: str, max_tokens: int | None = None) -> LLMResult:
+    def complete(self, system: str, user: str) -> LLMResult:
         payload = {
             "model": self.config.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": self.config.temperature,
-            "max_tokens": max_tokens or self.settings.llm_max_output_tokens,
             "stream": False,
         }
-        # DeepSeek V4 enables thinking by default. For batch summarisation this
-        # can consume the generation budget in reasoning and leave an empty
-        # final `content` field. The summary pipeline needs an answer, not a
-        # chain of thought, so explicitly request non-thinking mode.
+        # Let the provider decide its generation budget. A local max_tokens cap
+        # makes DeepSeek's reasoning and final answer compete for the same small
+        # output allowance, which is especially harmful during long-video
+        # map/reduce summarisation.
         if self.is_deepseek:
-            payload["thinking"] = {"type": "disabled"}
+            # Explicitly request DeepSeek's reasoning mode for both direct and
+            # OpenAI-compatible DeepSeek endpoints. DeepSeek ignores temperature
+            # while reasoning is enabled, so it is deliberately omitted here.
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = "high"
+        else:
+            payload["temperature"] = self.config.temperature
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
@@ -109,6 +113,5 @@ class OpenAICompatibleLLM:
         result = self.complete(
             "You are a connectivity test. Reply with exactly OK.",
             "Return OK.",
-            max_tokens=16,
         )
         return result.content
