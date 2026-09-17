@@ -136,6 +136,30 @@ YTDLP_COOKIES_FILE=/run/secrets/yt-dlp.cookies.txt
 
 `secrets/` 已被 `.gitignore` 排除；不要将 Cookie、LLM API Key 或本地 `.env` 提交到 Git。
 
+### 抖音链接与 Cookie
+
+支持抖音直链 `https://www.douyin.com/video/<视频ID>`，以及“精选”页分享链接
+`https://www.douyin.com/jingxuan?modal_id=<视频ID>`；后者会在服务端自动转换为直链。
+
+抖音通常要求新鲜的浏览器 Cookie，即使视频本身可以在浏览器中公开播放。请使用你有权使用的抖音账号按以下步骤配置：
+
+1. 在 Windows 浏览器中登录 `douyin.com`，打开目标视频一次，并保持该浏览器会话有效。
+2. 使用可信的 Cookie 导出工具，将 **douyin.com** 的 Cookie 导出为 Netscape `cookies.txt` 格式；不要把 Cookie 发给他人或上传到第三方网站。
+3. 将导出的文件保存为 `secrets/yt-dlp.cookies.txt`。文件首行通常是 `# Netscape HTTP Cookie File`。
+4. 在项目根目录的 `.env` 添加或修改：
+
+   ```text
+   YTDLP_COOKIES_FILE=/run/secrets/yt-dlp.cookies.txt
+   ```
+
+5. 重建后端和 Worker，使两者读取新的只读挂载文件：
+
+   ```bash
+   docker compose up -d --build backend worker
+   ```
+
+Cookie 会过期或因抖音风控失效；出现 “Fresh cookies … are needed” 或“需要登录”时，重新登录并导出新的文件后重启上述两个服务。请遵守抖音的服务条款、内容访问权限和适用法律。
+
 每个任务默认输出到：
 
 ```text

@@ -15,6 +15,7 @@ class LLMConfig:
     api_key: str
     temperature: float
     custom_prompt: str | None
+    embedding_model: str = ""
 
 
 DEFAULTS = {
@@ -25,6 +26,7 @@ DEFAULTS = {
     "llm.model": "deepseek-v4-flash",
     "llm.temperature": "0.2",
     "llm.custom_prompt": "",
+    "llm.embedding_model": "",
     "task.default_asr_model": "small",
     "task.default_language": "",
     "task.default_summary_enabled": "true",
@@ -63,6 +65,7 @@ def get_llm_config(db: Session, require_key: bool = True) -> LLMConfig | None:
         api_key=api_key or "",
         temperature=float(_get(db, "llm.temperature") or "0.2"),
         custom_prompt=_get(db, "llm.custom_prompt") or None,
+        embedding_model=_get(db, "llm.embedding_model") or "",
     )
 
 
@@ -80,6 +83,7 @@ def update_llm_config(
     api_key: str | None,
     temperature: float,
     custom_prompt: str | None,
+    embedding_model: str = "",
     clear_api_key: bool = False,
 ) -> None:
     _set(db, "llm.provider", provider)
@@ -87,6 +91,7 @@ def update_llm_config(
     _set(db, "llm.model", model)
     _set(db, "llm.temperature", str(temperature))
     _set(db, "llm.custom_prompt", custom_prompt or "")
+    _set(db, "llm.embedding_model", embedding_model.strip())
     if clear_api_key:
         delete_setting(db, "llm.api_key")
     elif api_key:
@@ -106,6 +111,7 @@ def llm_public_view(db: Session) -> dict:
         "api_key_masked": mask_secret(api_key),
         "temperature": config.temperature,
         "custom_prompt": config.custom_prompt,
+        "embedding_model": config.embedding_model,
     }
 
 

@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     ytdlp_cookies_file: str | None = None
+    playwright_browser_executable: str | None = None
+    playwright_profile_dir: Path | None = None
+    playwright_timeout_seconds: int = 90000
+    douyin_login_timeout_seconds: int = 180
     download_max_height: int = 1080
     max_video_duration_seconds: int = 14400
     max_download_bytes: int = 8589934592
@@ -57,6 +61,12 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         (self.data_dir / "jobs").mkdir(parents=True, exist_ok=True)
         (self.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "creators").mkdir(parents=True, exist_ok=True)
+        self.douyin_profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    @property
+    def douyin_profile_dir(self) -> Path:
+        return self.playwright_profile_dir or (self.data_dir / "playwright" / "douyin")
 
 
 @lru_cache

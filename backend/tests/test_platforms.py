@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from app.services.platforms import UnsafeURLError, detect_platform, validate_public_url
+from app.services.platforms import UnsafeURLError, detect_platform, normalize_video_url, validate_public_url
 from app.services.text_normalizer import normalize_simplified_chinese
 
 
@@ -14,6 +14,25 @@ def test_detect_platforms():
     assert detect_platform("https://youtu.be/example") == "youtube"
     assert detect_platform("https://example.com/video") == "generic"
     assert detect_platform("https://notbilibili.com/video") == "generic"
+
+
+def test_normalizes_douyin_jingxuan_modal_url_to_video_url():
+    url = "https://www.douyin.com/jingxuan?modal_id=7684991727148551487&utm_source=share"
+
+    assert normalize_video_url(url) == "https://www.douyin.com/video/7684991727148551487"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.douyin.com/video/7684991727148551487",
+        "https://www.douyin.com/jingxuan?modal_id=not-a-video-id",
+        "https://www.douyin.com/jingxuan?modal_id=7684991727148551487&modal_id=7684991727148551488",
+        "https://notdouyin.com/jingxuan?modal_id=7684991727148551487",
+    ],
+)
+def test_only_normalizes_valid_douyin_jingxuan_modal_url(url):
+    assert normalize_video_url(url) == url
 
 
 def _resolved_addresses(*ips: str):

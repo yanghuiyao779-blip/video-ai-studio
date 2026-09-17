@@ -1,8 +1,10 @@
 import ipaddress
+import re
 import socket
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+DOUYIN_VIDEO_ID = re.compile(r"^\d{10,30}$")
 
 
 class UnsafeURLError(ValueError):
@@ -37,6 +39,25 @@ def detect_platform(url: str) -> str:
     if _matches_domain(host, "youtube.com") or host == "youtu.be":
         return "youtube"
     return "generic"
+
+
+def normalize_video_url(url: str) -> str:
+    """Convert supported platform share-page URLs to extractor-compatible URLs.
+
+    Douyin's ``/jingxuan?modal_id=...`` page opens a video in a modal, while
+    yt-dlp's Douyin extractor accepts only ``/video/<id>``.  Keep the
+    conversion tightly scoped to a validated Douyin host and a decimal video
+    identifier so arbitrary query parameters cannot change the download URL.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not _matches_domain(host, "douyin.com") or parsed.path.rstrip("/") != "/jingxuan":
+        return url
+
+    modal_ids = parse_qs(parsed.query).get("modal_id", [])
+    if len(modal_ids) != 1 or not DOUYIN_VIDEO_ID.fullmatch(modal_ids[0]):
+        return url
+    return f"https://www.douyin.com/video/{modal_ids[0]}"
 
 
 def validate_public_url(url: str) -> None:

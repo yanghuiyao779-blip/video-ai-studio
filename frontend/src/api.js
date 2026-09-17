@@ -67,6 +67,17 @@ function uploadRequest(formData, onProgress) {
   })
 }
 
+async function authenticatedBlob(path) {
+  const token = getToken()
+  const response = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (!response.ok) {
+    let message = `请求失败（HTTP ${response.status}）`
+    try { message = (await response.json()).detail || message } catch { /* keep fallback */ }
+    throw new Error(message)
+  }
+  return response.blob()
+}
+
 export const api = {
   login: (username, password) => request('/api/auth/login', {
     method: 'POST',
@@ -99,6 +110,52 @@ export const api = {
   saveTaskDefaults: (payload) => request('/api/settings/task-defaults', { method: 'PUT', body: JSON.stringify(payload) }),
   getStorage: () => request('/api/settings/storage'),
   cleanTemporaryStorage: () => request('/api/settings/storage/temporary', { method: 'DELETE' }),
+  douyinSessionStatus: () => request('/api/douyin/session/status'),
+  startDouyinLogin: () => request('/api/douyin/session/login', { method: 'POST' }),
+  douyinLoginQr: () => authenticatedBlob('/api/douyin/session/qr'),
+  creators: () => request('/api/creators'),
+  creatorDashboard: () => request('/api/creators/dashboard'),
+  previewCreator: (payload) => request('/api/creators/preview', { method: 'POST', body: JSON.stringify(payload) }),
+  createCreator: (payload) => request('/api/creators', { method: 'POST', body: JSON.stringify(payload) }),
+  creatorOverview: (id) => request(`/api/creators/${id}/overview`),
+  creatorSyncRuns: (id) => request(`/api/creators/${id}/sync-runs`),
+  creatorVideos: (id) => request(`/api/creators/${id}/videos`),
+  importCreatorVideos: (id, urls) => request(`/api/creators/${id}/videos/import`, { method: 'POST', body: JSON.stringify({ urls }) }),
+  syncCreator: (id) => request(`/api/creators/${id}/sync`, { method: 'POST' }),
+  startCreatorResearch: (id, payload) => request(`/api/creators/${id}/research/start`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateCreatorResearch: (id, runId, payload) => request(`/api/creators/${id}/research/${runId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  continueCreatorResearch: (id) => request(`/api/creators/${id}/research/continue`, { method: 'POST' }),
+  pauseCreatorResearch: (id, runId) => request(`/api/creators/${id}/research/${runId}/pause`, { method: 'POST' }),
+  dispatchCreator: (id) => request(`/api/creators/${id}/dispatch`, { method: 'POST' }),
+  analyzeCreator: (id) => request(`/api/creators/${id}/analyze`, { method: 'POST' }),
+  creatorAnalysisRuns: (id) => request(`/api/creators/${id}/analysis-runs`),
+  createCreatorAnalysis: (id) => request(`/api/creators/${id}/analysis-runs`, { method: 'POST' }),
+  createCreatorSkill: (id, analysisRunId) => request(`/api/creators/${id}/skills?analysis_run_id=${encodeURIComponent(analysisRunId)}`, { method: 'POST' }),
+  indexCreator: (id) => request(`/api/creators/${id}/index`, { method: 'POST' }),
+  askCreator: (id, question) => request(`/api/creators/${id}/ask`, { method: 'POST', body: JSON.stringify({ question }) }),
+  downloadCreatorSkill: async (downloadUrl, fallbackFilename = 'SKILL.md') => {
+    const token = getToken()
+    const response = await fetch(downloadUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!response.ok) {
+      let message = `文件下载失败（HTTP ${response.status}）`
+      try { message = (await response.json()).detail || message } catch { /* Keep fallback for non-JSON responses. */ }
+      throw new Error(message)
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('content-disposition') || ''
+    const match = disposition.match(/filename="?([^";]+)"?/i)
+    const filename = match?.[1] || fallbackFilename
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  },
   downloadArtifact: async (jobId, name) => {
     const token = getToken()
     const response = await fetch(`/api/jobs/${jobId}/artifacts/${name}`, {

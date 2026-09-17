@@ -56,6 +56,12 @@ def _fail(job_id: str, exc: Exception) -> None:
     code, message = classify_exception(exc)
     with SessionLocal() as db:
         fail_job(db, job_id, message, code=code)
+    # Source media and extracted audio are transient by default.  A failed
+    # task used to leave its work directory forever; keep it only when the
+    # administrator explicitly enables source-media retention.
+    settings = get_settings()
+    if not settings.keep_source_media:
+        shutil.rmtree(settings.data_dir / "jobs" / job_id / "work", ignore_errors=True)
 
 
 def _validated_upload_path(source_path: str, job_id: str) -> Path:

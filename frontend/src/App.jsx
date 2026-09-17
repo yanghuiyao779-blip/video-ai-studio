@@ -104,9 +104,27 @@ const ERROR_TITLES = {
   network_timeout: '处理请求超时', network_error: '服务器网络异常',
 }
 
-function taskIdFromPath() {
-  const matched = window.location.pathname.match(/^\/tasks\/([^/]+)\/?$/)
-  return matched ? decodeURIComponent(matched[1]) : null
+const CREATOR_TABS = new Set(['overview', 'videos', 'profile', 'skill'])
+
+function routeFromLocation() {
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/'
+  const search = new URLSearchParams(window.location.search)
+  const task = pathname.match(/^\/tasks\/([^/]+)$/)
+  if (task) return { page: 'history', taskId: decodeURIComponent(task[1]), creatorId: null, creatorTab: 'overview' }
+  const creator = pathname.match(/^\/creators\/([^/]+)$/)
+  if (creator) {
+    const creatorTab = search.get('tab')
+    return {
+      page: 'creators', taskId: null, creatorId: decodeURIComponent(creator[1]),
+      creatorTab: CREATOR_TABS.has(creatorTab) ? creatorTab : 'overview',
+    }
+  }
+  const page = { '/history': 'history', '/creators': 'creators', '/settings': 'settings', '/help': 'help' }[pathname] || 'parse'
+  return { page, taskId: null, creatorId: null, creatorTab: 'overview' }
+}
+
+function pathForPage(page) {
+  return { parse: '/', history: '/history', creators: '/creators', settings: '/settings', help: '/help' }[page] || '/'
 }
 
 function formatDuration(seconds) {
@@ -682,7 +700,7 @@ function ProviderSettings({ value, onSaved }) {
   async function save(event) {
     event.preventDefault(); setBusy(true); setError(''); setMessage('')
     try {
-      const saved = await api.saveLLM({ provider: form.provider, base_url: form.base_url, model: form.model, api_key: apiKey || null, temperature: Number(form.temperature), custom_prompt: form.custom_prompt || null })
+      const saved = await api.saveLLM({ provider: form.provider, base_url: form.base_url, model: form.model, embedding_model: form.embedding_model || '', api_key: apiKey || null, temperature: Number(form.temperature), custom_prompt: form.custom_prompt || null })
       setApiKey(''); setMessage('设置已保存，API Key 已在服务端加密存储。'); onSaved(saved)
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
@@ -696,7 +714,7 @@ function ProviderSettings({ value, onSaved }) {
     if (!window.confirm('确定清除服务器中保存的 AI API Key 吗？')) return
     setBusy(true); setError(''); setMessage('')
     try {
-      const saved = await api.saveLLM({ provider: form.provider, base_url: form.base_url, model: form.model, api_key: null, clear_api_key: true, temperature: Number(form.temperature), custom_prompt: form.custom_prompt || null })
+      const saved = await api.saveLLM({ provider: form.provider, base_url: form.base_url, model: form.model, embedding_model: form.embedding_model || '', api_key: null, clear_api_key: true, temperature: Number(form.temperature), custom_prompt: form.custom_prompt || null })
       setMessage('已清除保存的 API Key。'); onSaved(saved)
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
@@ -706,7 +724,7 @@ function ProviderSettings({ value, onSaved }) {
     <div className="two-cols"><label>模型名称<input required value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="输入服务商支持的模型名称" /></label><label>API Key<div className="secret-input"><input type="password" autoComplete="off" placeholder={form.api_key_configured ? `已配置 ${form.api_key_masked || ''}，留空表示保持不变` : '粘贴 API Key'} value={apiKey} onChange={(e) => setApiKey(e.target.value)} />{form.api_key_configured && <span className="secret-ok">已配置</span>}</div></label></div>
     {form.provider === 'custom' && <label>Base URL<input required value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="例如 https://example.com/v1" /><small>填写到 API 根路径，系统会自动拼接 /chat/completions。</small></label>}
     <button type="button" className="advanced-toggle" onClick={() => setAdvanced(!advanced)}>{advanced ? '收起高级参数' : '高级参数'} <span>{advanced ? '⌃' : '⌄'}</span></button>
-    {advanced && <div className="advanced-panel"><div className="two-cols"><label>Temperature<input type="number" min="0" max="2" step="0.1" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: e.target.value })} /><small>视频总结建议使用 0.1–0.4。</small></label><div /></div><label>全局系统提示词<textarea rows="5" value={form.custom_prompt || ''} onChange={(e) => setForm({ ...form, custom_prompt: e.target.value })} placeholder="可选。通常保持为空，使用系统内置的事实型总结提示词即可。" /></label></div>}
+    {advanced && <div className="advanced-panel"><div className="two-cols"><label>Temperature<input type="number" min="0" max="2" step="0.1" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: e.target.value })} /><small>视频总结建议使用 0.1–0.4。</small></label><label>Embedding 模型<input value={form.embedding_model || ''} onChange={(e) => setForm({ ...form, embedding_model: e.target.value })} placeholder="例如 text-embedding-3-small" /><small>RAG 必填，当前要求 1536 维。</small></label></div><label>全局系统提示词<textarea rows="5" value={form.custom_prompt || ''} onChange={(e) => setForm({ ...form, custom_prompt: e.target.value })} placeholder="可选。通常保持为空，使用系统内置的事实型总结提示词即可。" /></label></div>}
     {message && <Alert type="success">{message}</Alert>}{error && <Alert type="error">{error}</Alert>}
     <div className="button-row"><button className="primary" disabled={busy}>保存设置</button><button type="button" className="secondary" disabled={busy || !form.api_key_configured} onClick={test}>测试连接</button>{form.api_key_configured && <button type="button" className="text-danger" disabled={busy} onClick={removeKey}>清除 Key</button>}</div>
   </form></section>
@@ -735,12 +753,30 @@ function DefaultTaskSettings({ value, onSaved }) {
   return <section className="settings-section"><div className="settings-title"><h2>默认任务设置</h2><p>减少重复选择；已创建的任务不会受到影响。</p></div><form className="settings-content" onSubmit={save}><div className="two-cols"><label>默认识别方式<select value={form.asr_model} onChange={(e) => setForm({ ...form, asr_model: e.target.value })}><option value="base">快速</option><option value="small">均衡（推荐）</option><option value="medium">高精度</option><option value="large-v3">最高精度</option></select></label><label>默认视频语言<select value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}><option value="">自动识别</option><option value="zh">中文</option><option value="en">英文</option><option value="ja">日语</option><option value="ko">韩语</option></select></label></div><div className="two-cols"><label>默认总结模板<select value={form.summary_preset} onChange={(e) => setForm({ ...form, summary_preset: e.target.value })}>{Object.entries(SUMMARY_PRESETS).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</select></label><label>默认摘要长度<select value={form.summary_depth} onChange={(e) => setForm({ ...form, summary_depth: e.target.value })}><option value="brief">简洁</option><option value="standard">标准</option><option value="detailed">详细</option></select></label></div><div className="setting-row"><div><strong>默认生成 AI 摘要</strong><span>关闭时默认只生成文字稿和字幕。</span></div><label className="switch"><input type="checkbox" checked={form.summary_enabled} onChange={(e) => setForm({ ...form, summary_enabled: e.target.checked })} /><span /></label></div>{message && <Alert type="success">{message}</Alert>}<button className="primary" disabled={busy}>{busy ? '正在保存…' : '保存默认设置'}</button></form></section>
 }
 
-function StorageSettings({ storage, onRefresh }) {
+function StorageSettings({ storage, onRefresh, autoRefreshing }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  async function clean() { if (!window.confirm(`确定清理 ${formatBytes(storage?.removable_temporary_bytes)} 可安全删除的历史临时文件吗？不会删除任务结果。`)) return; setBusy(true); setError(''); try { await api.cleanTemporaryStorage(); await onRefresh() } catch (err) { setError(err.message) } finally { setBusy(false) } }
-  const items = [['结果与任务目录', storage?.jobs_bytes], ['上传源文件', storage?.uploads_bytes], ['模型缓存', storage?.models_bytes], ['临时处理文件', storage?.temporary_bytes], ['磁盘剩余空间', storage?.disk_free_bytes]]
-  return <section className="settings-section"><div className="settings-title"><h2>下载与存储</h2><p>原始媒体与音频中间文件会按服务器策略清理；结果文件可在任务详情下载或删除。</p></div><div className="settings-content"><div className="storage-list">{items.map(([label, bytes]) => <div key={label}><span>{label}</span><strong>{storage ? formatBytes(bytes) : '读取中…'}</strong></div>)}</div>{error && <Alert type="error">{error}</Alert>}<div className="button-row"><button className="secondary" onClick={onRefresh}>刷新统计</button><button className="danger-button" disabled={busy || !storage?.removable_temporary_bytes} onClick={clean}>{busy ? '正在清理…' : `清理临时文件（${formatBytes(storage?.removable_temporary_bytes)}）`}</button></div></div></section>
+  const [message, setMessage] = useState('')
+  async function refreshStatistics() {
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const next = await onRefresh()
+      if (!next) return
+      const unchanged = storage && ['task_results_bytes', 'temporary_bytes', 'uploads_bytes', 'creator_artifacts_bytes', 'rag_index_bytes', 'playwright_profile_bytes', 'models_bytes', 'disk_free_bytes'].every((key) => storage[key] === next[key])
+      setMessage(unchanged ? '统计已更新，存储占用没有变化。' : '统计已更新。')
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+  async function clean() {
+    if (!window.confirm(`确定清理 ${formatBytes(storage?.removable_temporary_bytes)} 可安全删除的历史临时文件吗？不会删除任务结果、Skill、RAG 索引、模型缓存或抖音登录资料。`)) return
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const cleaned = await api.cleanTemporaryStorage()
+      await onRefresh()
+      setMessage(cleaned.freed_temporary_bytes ? `已释放 ${formatBytes(cleaned.freed_temporary_bytes)} 临时空间。` : '没有可清理的已结束任务临时文件。')
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+  const items = [['任务结果文件', storage?.task_results_bytes], ['临时处理文件', storage?.temporary_bytes], ['上传源文件', storage?.uploads_bytes], ['博主 Skill 文件', storage?.creator_artifacts_bytes], ['RAG 索引（数据库）', storage?.rag_index_bytes], ['抖音浏览器登录资料', storage?.playwright_profile_bytes], ['模型缓存', storage?.models_bytes], ['磁盘剩余空间', storage?.disk_free_bytes]]
+  return <section className="settings-section"><div className="settings-title"><h2>下载与存储</h2><p>任务结果与临时工作文件分开统计；临时清理不会删除结果、Skill、RAG、模型或登录资料。</p></div><div className="settings-content"><div className="storage-list">{items.map(([label, bytes]) => <div key={label}><span>{label}</span><strong>{storage ? formatBytes(bytes) : '读取中…'}</strong></div>)}</div><div className="storage-meta"><span>{autoRefreshing ? '自动刷新中：有运行中的任务，每 2.5 秒更新一次。' : '当前没有运行中的任务；可手动刷新统计。'}</span><small>最后统计：{storage?.measured_at ? formatDate(storage.measured_at) : '读取中…'}</small></div>{message && <Alert type="success">{message}</Alert>}{error && <Alert type="error">{error}</Alert>}<div className="button-row"><button className="secondary" disabled={busy} onClick={refreshStatistics}>{busy ? '正在统计…' : '刷新统计'}</button><button className="danger-button" disabled={busy || !storage?.removable_temporary_bytes} onClick={clean}>{busy ? '正在清理…' : `清理临时文件（${formatBytes(storage?.removable_temporary_bytes)}）`}</button></div></div></section>
 }
 
 function SecuritySettings() {
@@ -761,9 +797,43 @@ function SecuritySettings() {
   return <section className="settings-section"><div className="settings-title"><h2>账号安全</h2><p>首次部署后建议立即修改初始化管理员密码。</p></div><form className="settings-content" onSubmit={submit}><div className="two-cols"><label>当前密码<input type="password" autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></label><div /></div><div className="two-cols"><label>新密码<input type="password" autoComplete="new-password" minLength="12" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /><small>至少 12 个字符。</small></label><label>确认新密码<input type="password" autoComplete="new-password" minLength="12" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></label></div>{message && <Alert type="success">{message}</Alert>}{error && <Alert type="error">{error}</Alert>}<div className="button-row"><button className="primary" disabled={busy || !currentPassword || !newPassword || !confirmPassword}>修改密码</button></div></form></section>
 }
 
-function SettingsPage({ settings, health, defaults, storage, onSaved, onDefaultsSaved, onRefreshHealth, onRefreshStorage }) {
+function DouyinConnectionSettings() {
+  const [session, setSession] = useState(null)
+  const [qrUrl, setQrUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function refresh() {
+    try { setSession(await api.douyinSessionStatus()); setError('') } catch (err) { setError(err.message) }
+  }
+  async function loadQr() {
+    try {
+      const blob = await api.douyinLoginQr()
+      const nextUrl = URL.createObjectURL(blob)
+      setQrUrl((current) => { if (current) URL.revokeObjectURL(current); return nextUrl })
+    } catch { /* QR is not ready yet; status polling will retry. */ }
+  }
+  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    if (!session || !['starting', 'awaiting_scan', 'verification_required'].includes(session.status)) return undefined
+    if (session.qr_available) loadQr()
+    const timer = window.setInterval(() => { refresh() }, 1800)
+    return () => window.clearInterval(timer)
+  }, [session?.status, session?.qr_updated_at])
+  useEffect(() => () => { if (qrUrl) URL.revokeObjectURL(qrUrl) }, [qrUrl])
+  async function connect() {
+    setBusy(true); setError('')
+    try { setSession(await api.startDouyinLogin()) } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+  const connected = session?.status === 'connected'
+  const verificationRequired = session?.status === 'verification_required'
+  const loginVisual = ['awaiting_scan', 'verification_required'].includes(session?.status)
+  return <section className="settings-section"><div className="settings-title"><h2>抖音连接</h2><p>登录态仅保存在本机持久化浏览器 Profile 中，用于识别博主、采集公开视频与下载已发现作品。</p></div><div className="settings-content douyin-session"><div className="douyin-session-head"><div><span className={`status-pill ${connected ? 'success' : loginVisual ? 'info' : 'neutral'}`}><i />{connected ? '已连接' : verificationRequired ? '需要人机验证' : session?.status === 'awaiting_scan' ? '等待登录' : '未连接'}</span><p>{session?.message || '正在读取连接状态…'}</p>{session?.last_verified_at && <small>最近验证：{formatDate(session.last_verified_at)}</small>}</div><button className="primary" disabled={busy || ['starting', 'awaiting_scan', 'verification_required'].includes(session?.status)} onClick={connect}>{busy || session?.status === 'starting' ? '正在打开登录页…' : connected ? '重新连接' : '连接抖音账号'}</button></div>{loginVisual && <div className="douyin-qr"><div>{qrUrl ? <img src={qrUrl} alt="抖音登录或验证画面" /> : <span>正在加载登录画面…</span>}</div><p>{verificationRequired ? '抖音当前要求浏览器人机验证。系统不会尝试绕过验证；请使用已有有效 Cookie 作为备用方式，或在可信的可见浏览器环境中完成登录后再复用该 Profile。' : '请使用抖音 App 扫描页面中的二维码。扫码成功后此页面会自动更新。'}</p></div>}<div className="session-note">ⓘ 不会把 Cookie、浏览器 Profile 或账号凭据发送到前端；若登录失效，请重新扫码。请仅处理你有权访问及符合平台规则的公开内容。</div>{error && <Alert type="error">{error}</Alert>}</div></section>
+}
+
+function SettingsPage({ settings, health, defaults, storage, onSaved, onDefaultsSaved, onRefreshHealth, onRefreshStorage, storageAutoRefreshing }) {
   const [section, setSection] = useState('ai')
-  return <div className="workspace-page"><header className="page-header"><div><span className="kicker">设置</span><h1>工作台设置</h1><p>配置 AI 模型、检查系统运行状态和管理账号安全。</p></div></header><div className="settings-layout"><aside className="settings-nav"><button className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}>AI 模型</button><button className={section === 'defaults' ? 'active' : ''} onClick={() => setSection('defaults')}>默认任务</button><button className={section === 'asr' ? 'active' : ''} onClick={() => setSection('asr')}>语音识别</button><button className={section === 'storage' ? 'active' : ''} onClick={() => setSection('storage')}>下载与存储</button><button className={section === 'system' ? 'active' : ''} onClick={() => setSection('system')}>系统状态</button><button className={section === 'security' ? 'active' : ''} onClick={() => setSection('security')}>账号安全</button></aside><div className="settings-main">{section === 'ai' && <ProviderSettings value={settings} onSaved={onSaved} />}{section === 'defaults' && <DefaultTaskSettings value={defaults} onSaved={onDefaultsSaved} />}{section === 'asr' && <SettingsNotice title="语音识别" text="识别精度在每个任务中选择：快速、均衡和高精度分别映射到不同 Whisper 模型。高级模型设置仍保留在创建任务页面，避免影响普通使用。" />}{section === 'storage' && <StorageSettings storage={storage} onRefresh={onRefreshStorage} />}{section === 'system' && <SystemSettings health={health} onRefresh={onRefreshHealth} />}{section === 'security' && <SecuritySettings />}</div></div></div>
+  return <div className="workspace-page"><header className="page-header"><div><span className="kicker">设置</span><h1>工作台设置</h1><p>配置 AI 模型、连接抖音账号、检查系统运行状态和管理账号安全。</p></div></header><div className="settings-layout"><aside className="settings-nav"><button className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}>AI 模型</button><button className={section === 'douyin' ? 'active' : ''} onClick={() => setSection('douyin')}>抖音连接</button><button className={section === 'defaults' ? 'active' : ''} onClick={() => setSection('defaults')}>默认任务</button><button className={section === 'asr' ? 'active' : ''} onClick={() => setSection('asr')}>语音识别</button><button className={section === 'storage' ? 'active' : ''} onClick={() => setSection('storage')}>下载与存储</button><button className={section === 'system' ? 'active' : ''} onClick={() => setSection('system')}>系统状态</button><button className={section === 'security' ? 'active' : ''} onClick={() => setSection('security')}>账号安全</button></aside><div className="settings-main">{section === 'ai' && <ProviderSettings value={settings} onSaved={onSaved} />}{section === 'douyin' && <DouyinConnectionSettings />}{section === 'defaults' && <DefaultTaskSettings value={defaults} onSaved={onDefaultsSaved} />}{section === 'asr' && <SettingsNotice title="语音识别" text="识别精度在每个任务中选择：快速、均衡和高精度分别映射到不同 Whisper 模型。高级模型设置仍保留在创建任务页面，避免影响普通使用。" />}{section === 'storage' && <StorageSettings storage={storage} onRefresh={onRefreshStorage} autoRefreshing={storageAutoRefreshing} />}{section === 'system' && <SystemSettings health={health} onRefresh={onRefreshHealth} />}{section === 'security' && <SecuritySettings />}</div></div></div>
 }
 
 function SettingsNotice({ title, text }) { return <section className="settings-section"><div className="settings-title"><h2>{title}</h2><p>{text}</p></div></section> }
@@ -772,11 +842,148 @@ function HelpPage() {
   return <div className="workspace-page"><header className="page-header"><div><span className="kicker">帮助</span><h1>使用帮助</h1><p>先识别视频确认链接有效，再选择识别精度并开始解析。</p></div></header><section className="card help-card"><h2>处理视频的三个步骤</h2><ol><li>粘贴公开视频链接，点击“识别视频”查看标题、时长和封面。</li><li>选择识别精度；通常保持“均衡（推荐）”即可。</li><li>开始解析。若尚未配置 AI 模型，可只生成文字稿与字幕。</li></ol><p>需要处理登录后才能访问的视频时，请由管理员在服务器配置对应平台的 Cookie。</p></section></div>
 }
 
+const RESEARCH_STATUS = {
+  queued: ['等待开始', 'neutral'], syncing: ['同步作品中', 'info'], ready_to_process: ['等待处理', 'warning'],
+  transcribing: ['转写中', 'info'], analyzing: ['提取观点中', 'info'], profiling: ['构建认知模型', 'info'],
+  paused: ['已暂停', 'warning'], completed: ['研究完成', 'success'], failed: ['需要处理', 'danger'],
+}
+
+function CreatorStatus({ value }) {
+  const [label, tone] = RESEARCH_STATUS[value] || [value || '待开始', 'neutral']
+  return <span className={`status-pill ${tone}`}><i />{label}</span>
+}
+
+function CreatorMetric({ label, value, hint }) {
+  return <div className="creator-metric"><span>{label}</span><strong>{value ?? 0}</strong>{hint && <small>{hint}</small>}</div>
+}
+
+function CreatorPipeline({ progress, activeStatus }) {
+  const complete = progress?.analyzed || 0
+  const total = progress?.total || 0
+  const percent = total ? Math.round((complete / total) * 100) : 0
+  const stages = [['同步作品', total > 0], ['视频转写', (progress?.transcribed || 0) + (progress?.analyzed || 0) > 0], ['提取观点', complete > 0], ['认知模型', ['profiling', 'completed'].includes(activeStatus)], ['生成 Skill', activeStatus === 'completed']]
+  return <div className="creator-pipeline"><div className="pipeline-steps">{stages.map(([label, done], index) => <div className={`creator-step ${done ? 'done' : ''} ${RESEARCH_STATUS[activeStatus] && index === 1 && ['transcribing', 'analyzing'].includes(activeStatus) ? 'active' : ''}`} key={label}><i>{done ? '✓' : index + 1}</i><span>{label}</span>{index < stages.length - 1 && <b>→</b>}</div>)}</div><div className="creator-progress-line"><i style={{ width: `${percent}%` }} /></div><small>{total ? `已完成认知提取 ${complete} / ${total} 条视频` : '尚未同步作品'}</small></div>
+}
+
+function CreatorCard({ creator, onOpen }) {
+  const transcriptPercent = creator.video_count ? Math.round((creator.transcript_count / creator.video_count) * 100) : 0
+  return <button className="creator-card" onClick={() => onOpen(creator)}><div className="creator-card-head"><span className="creator-avatar">{(creator.name || '博').slice(0, 1)}</span><div><strong>{creator.name || '未命名博主'}</strong><small>抖音 · {creator.platform_creator_id ? `@${creator.platform_creator_id.slice(0, 10)}…` : '已添加'}</small></div><span className="row-arrow">›</span></div><div className="creator-card-stats"><span><b>{creator.video_count}</b>作品</span><span><b>{creator.transcript_count}</b>文字稿</span><span><b>{creator.insight_count}</b>观点</span></div><div className="mini-progress"><i style={{ width: `${transcriptPercent}%` }} /></div><div className="creator-card-foot"><small>{creator.insight_count ? '认知模型可构建' : creator.video_count ? '等待转写与提取' : '等待同步作品'}</small><span className={`status-pill ${creator.status === 'ready' ? 'neutral' : 'info'}`}>{creator.status === 'ready' ? '准备就绪' : creator.status}</span></div></button>
+}
+
+function CreatorsPage({ creators, onRefresh, selectedCreatorId, selectedCreatorTab, onOpenCreator, onCloseCreator, onChangeCreatorTab }) {
+  const [profileUrl, setProfileUrl] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [overview, setOverview] = useState(null)
+  const [dashboard, setDashboard] = useState(null)
+  const [videos, setVideos] = useState([])
+  const [runs, setRuns] = useState([])
+  const [urls, setUrls] = useState('')
+  const [creatorPreview, setCreatorPreview] = useState(null)
+  const [message, setMessage] = useState('')
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState(null)
+  const [tab, setTab] = useState('overview')
+  const [autoContinue, setAutoContinue] = useState(false)
+  const [batchSize, setBatchSize] = useState(3)
+  const [targetVideoLimit, setTargetVideoLimit] = useState('10')
+  const [failureThreshold, setFailureThreshold] = useState('20')
+  const [busy, setBusy] = useState(false)
+
+  async function loadDashboard() { try { setDashboard(await api.creatorDashboard()) } catch { /* Parent refresh still reports transport errors. */ } }
+  async function loadCreator(creator) {
+    const [nextOverview, videoData, runData] = await Promise.all([api.creatorOverview(creator.id), api.creatorVideos(creator.id), api.creatorAnalysisRuns(creator.id)])
+    setSelected(nextOverview.creator); setOverview(nextOverview); setVideos(videoData); setRuns(runData)
+  }
+  async function open(creator, nextTab = 'overview', updateLocation = true) {
+    setMessage(''); setAnswer(null); setSelected(creator); setOverview(null); setVideos([]); setRuns([]); setTab(nextTab)
+    if (updateLocation) onOpenCreator(creator.id, nextTab)
+    try { await loadCreator(creator) } catch (err) { setMessage(err.message) }
+  }
+  function switchCreatorTab(nextTab) {
+    setTab(nextTab)
+    if (selected) onChangeCreatorTab(selected.id, nextTab)
+  }
+  async function refreshSelected() { if (selected) await loadCreator(selected) }
+  useEffect(() => { loadDashboard() }, [creators])
+  useEffect(() => {
+    if (!selectedCreatorId) {
+      if (selected) { setSelected(null); setOverview(null); setVideos([]); setRuns([]); setMessage('') }
+      return
+    }
+    const requestedCreator = creators.find((item) => item.id === selectedCreatorId)
+    if (!requestedCreator) return
+    if (selected?.id === requestedCreator.id) {
+      if (tab !== selectedCreatorTab) setTab(selectedCreatorTab)
+      return
+    }
+    open(requestedCreator, selectedCreatorTab, false)
+  }, [selectedCreatorId, selectedCreatorTab, creators, selected?.id])
+  useEffect(() => {
+    const status = overview?.latest_research?.status
+    if (!selected || !['queued', 'syncing', 'transcribing', 'analyzing', 'profiling'].includes(status)) return undefined
+    const timer = window.setInterval(() => { refreshSelected().catch(() => {}) }, 3000)
+    return () => window.clearInterval(timer)
+  }, [selected?.id, overview?.latest_research?.status])
+
+  async function identify(event) {
+    event.preventDefault(); setBusy(true); setMessage(''); setCreatorPreview(null)
+    try { setCreatorPreview(await api.previewCreator({ profile_url: profileUrl.trim() })) } catch (err) { setMessage(err.message) } finally { setBusy(false) }
+  }
+  async function confirmCreator() {
+    setBusy(true); setMessage('')
+    try { const creator = await api.createCreator({ profile_url: profileUrl.trim(), name: creatorPreview.nickname || null }); setProfileUrl(''); setCreatorPreview(null); await onRefresh(); await loadDashboard(); await open(creator) } catch (err) { setMessage(err.message) } finally { setBusy(false) }
+  }
+  async function action(fn, success) {
+    setBusy(true); setMessage('')
+    try { await fn(); setMessage(success); await onRefresh(); await loadDashboard(); await refreshSelected() } catch (err) { setMessage(err.message) } finally { setBusy(false) }
+  }
+  async function ask() {
+    setBusy(true); setMessage(''); setAnswer(null)
+    try { setAnswer(await api.askCreator(selected.id, question.trim())) } catch (err) { setMessage(err.message) } finally { setBusy(false) }
+  }
+  async function downloadSkill() {
+    if (!overview?.latest_skill) return
+    setBusy(true); setMessage('')
+    try {
+      await api.downloadCreatorSkill(overview.latest_skill.download_url, `creator-skill-v${overview.latest_skill.version}.md`)
+      setMessage('SKILL.md 已开始下载。')
+    } catch (err) { setMessage(err.message) } finally { setBusy(false) }
+  }
+  const stats = dashboard || { creator_count: creators.length, video_count: creators.reduce((sum, item) => sum + item.video_count, 0), transcript_count: creators.reduce((sum, item) => sum + item.transcript_count, 0), insight_count: creators.reduce((sum, item) => sum + item.insight_count, 0), skill_count: 0 }
+  const research = overview?.latest_research
+  const creator = overview?.creator || selected
+
+  return <div className="workspace-page creator-workspace"><header className="page-header"><div><span className="kicker">Creator Intelligence</span><h1>博主研究</h1><p>批量解析博主公开视频，提取观点、方法论和思维模式，生成可检索的认知模型与 Skill。</p></div></header>
+    {!selected ? <>
+      <section className="creator-metrics"><CreatorMetric label="已研究博主" value={stats.creator_count} /><CreatorMetric label="已发现作品" value={stats.video_count} /><CreatorMetric label="已完成转写" value={stats.transcript_count} /><CreatorMetric label="已生成 Skill" value={stats.skill_count} /></section>
+      <section className="card creator-onboarding"><div><h2>添加博主</h2><p>粘贴博主主页、任意视频或抖音分享链接，系统会自动识别创作者身份。</p></div><form className="creator-identify-form" onSubmit={identify}><input value={profileUrl} onChange={(e) => { setProfileUrl(e.target.value); setCreatorPreview(null); setMessage('') }} placeholder="粘贴博主主页、视频链接或抖音分享链接" required /><button className="primary" disabled={busy}>{busy ? '识别中…' : '识别博主'}</button></form><div className="creator-support"><span>支持：主页链接 · 单条视频 · <code>/user/self?modal_id=</code> · <code>v.douyin.com</code> 短链</span><span>ⓘ 若主页访问受限，可在详情页批量导入视频链接。</span></div>
+        {creatorPreview && <div className="creator-preview-card"><span className="creator-avatar large">{(creatorPreview.nickname || '博').slice(0, 1)}</span><div><span className="kicker">已识别博主</span><h3>{creatorPreview.nickname || '未知昵称'}</h3><p>识别方式：{creatorPreview.resolution_method} · 规范主页已确认</p><small>{creatorPreview.canonical_url}</small></div><div className="creator-preview-actions"><button className="secondary" onClick={() => setCreatorPreview(null)}>取消</button><button className="primary" disabled={busy} onClick={confirmCreator}>开始研究</button></div></div>}
+        {message && <Alert type="error">{message}</Alert>}</section>
+      <section className="creator-flow"><strong>建立认知模型的过程</strong><div><span>同步作品</span><b>→</b><span>视频转写</span><b>→</b><span>提取观点</span><b>→</b><span>发现规律</span><b>→</b><span>认知模型</span><b>→</b><span>生成 Skill</span></div></section>
+      <section className="creator-list-section"><div className="section-heading"><div><h2>已研究的博主</h2><p>每位博主的作品、文字稿、观点和方法论都可追溯。</p></div></div>{creators.length ? <div className="creator-card-grid">{creators.map((item) => <CreatorCard creator={item} key={item.id} onOpen={open} />)}</div> : <div className="card creator-empty"><div className="empty-icon">◇</div><strong>还没有研究过博主</strong><p>添加第一个博主后，系统会协助完成同步作品、视频转写、观点提取、规律归纳与 Skill 生成。</p><button className="primary" onClick={() => document.querySelector('.creator-identify-form input')?.focus()}>添加第一个博主</button></div>}</section>
+    </> : <>
+      <div className="page-actions"><button className="secondary" onClick={() => { setSelected(null); setOverview(null); setMessage(''); onCloseCreator() }}>← 返回博主列表</button><span>{creator?.name || creator?.profile_url}</span>{research && <CreatorStatus value={research.status} />}</div>
+      <section className="card creator-detail-hero"><div className="creator-detail-title"><span className="creator-avatar large">{(creator?.name || '博').slice(0, 1)}</span><div><span className="kicker">抖音博主研究</span><h2>{creator?.name || '未命名博主'}</h2><p>{creator?.platform_creator_id ? `@${creator.platform_creator_id}` : '身份已识别'} · 最近同步：{creator?.last_synced_at ? formatDate(creator.last_synced_at) : '尚未同步'}</p></div></div><div className="button-row"><button className="secondary" disabled={busy} onClick={() => action(() => api.syncCreator(creator.id), '已单独提交主页同步。')}>同步最新作品</button>{research && !['completed', 'failed'].includes(research.status) && <button className="secondary" disabled={busy} onClick={() => action(() => api.pauseCreatorResearch(creator.id, research.id), '研究已暂停；已提交的视频任务会安全完成。')}>暂停研究</button>}</div><div className="creator-detail-metrics"><CreatorMetric label="作品" value={overview?.progress?.total} /><CreatorMetric label="已转写" value={(overview?.progress?.transcribed || 0) + (overview?.progress?.analyzed || 0)} /><CreatorMetric label="已分析" value={overview?.progress?.analyzed} /><CreatorMetric label="失败" value={overview?.progress?.failed} /></div><CreatorPipeline progress={overview?.progress} activeStatus={research?.status} /></section>
+      <section className="card creator-control-card"><div><h2>{research ? '研究控制台' : '开始研究'}</h2><p>{research?.status === 'ready_to_process' ? `主页同步完成。将按每批 ${research.batch_size} 条视频处理，避免占满普通视频任务队列。` : research?.status === 'completed' ? '认知模型与 Skill 已生成，可到下方测试该方法论。' : '同步作品后按受控批次处理视频，避免一次性产生过多下载、语音识别与模型调用。'}</p></div>{!research && <div className="creator-start-controls"><label className="inline-check"><input type="checkbox" checked={autoContinue} onChange={(e) => setAutoContinue(e.target.checked)} /> 自动继续下一批</label><label>每批<select value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))}><option value={3}>3 条</option><option value={5}>5 条</option><option value={10}>10 条</option></select></label><label>处理上限<select value={targetVideoLimit} onChange={(e) => setTargetVideoLimit(e.target.value)}><option value="10">10 条</option><option value="50">50 条</option><option value="">全部</option></select></label><label>失败阈值<select value={failureThreshold} onChange={(e) => setFailureThreshold(e.target.value)}><option value="10">10%</option><option value="20">20%</option><option value="30">30%</option><option value="">不自动暂停</option></select></label><button className="primary" disabled={busy} onClick={() => action(() => api.startCreatorResearch(creator.id, { batch_size: batchSize, auto_continue: autoContinue, target_video_limit: targetVideoLimit ? Number(targetVideoLimit) : null, failure_threshold_percent: failureThreshold ? Number(failureThreshold) : null }), '已开始研究：正在同步博主主页。')}>开始研究</button></div>}{research && !['completed', 'failed'].includes(research.status) && <div className="creator-start-controls creator-running-controls"><label className="inline-check"><input type="checkbox" checked={research.auto_continue} disabled={busy} onChange={(e) => action(() => api.updateCreatorResearch(creator.id, research.id, { auto_continue: e.target.checked }), e.target.checked ? '已开启自动继续。' : '已关闭自动继续；当前批次仍会完成。')} /> 自动继续下一批</label><label>每批<select value={research.batch_size} disabled={busy} onChange={(e) => action(() => api.updateCreatorResearch(creator.id, research.id, { batch_size: Number(e.target.value) }), '已更新下一批大小。')}><option value={3}>3 条</option><option value={5}>5 条</option><option value={10}>10 条</option></select></label><label>处理上限<select value={research.target_video_limit ?? ''} disabled={busy} onChange={(e) => action(() => api.updateCreatorResearch(creator.id, research.id, { target_video_limit: e.target.value ? Number(e.target.value) : null }), '已更新处理上限。')}><option value={10}>10 条</option><option value={50}>50 条</option><option value="">全部</option></select></label><label>失败阈值<select value={research.failure_threshold_percent ?? ''} disabled={busy} onChange={(e) => action(() => api.updateCreatorResearch(creator.id, research.id, { failure_threshold_percent: e.target.value ? Number(e.target.value) : null }), '已更新失败阈值。')}><option value={10}>10%</option><option value={20}>20%</option><option value={30}>30%</option><option value="">不自动暂停</option></select></label></div>}{research && ['ready_to_process', 'paused', 'transcribing', 'analyzing', 'profiling'].includes(research.status) && <button className="primary" disabled={busy} onClick={() => action(() => api.continueCreatorResearch(creator.id), '已检查并继续研究流程。')}>{research.status === 'paused' ? '继续研究' : research.status === 'ready_to_process' ? '处理下一批视频' : research.status === 'profiling' ? '检查模型构建状态' : '检查并继续下一步'}</button>}{research?.status === 'failed' && <button className="primary" disabled={busy} onClick={() => action(() => api.startCreatorResearch(creator.id, { batch_size: batchSize, auto_continue: autoContinue, target_video_limit: targetVideoLimit ? Number(targetVideoLimit) : null, failure_threshold_percent: failureThreshold ? Number(failureThreshold) : null }), '已重新开始研究。')}>重新开始研究</button>}</section>
+      <div className="creator-tabs"><button className={tab === 'overview' ? 'active' : ''} onClick={() => switchCreatorTab('overview')}>概览</button><button className={tab === 'videos' ? 'active' : ''} onClick={() => switchCreatorTab('videos')}>作品 <span>{videos.length}</span></button><button className={tab === 'profile' ? 'active' : ''} onClick={() => switchCreatorTab('profile')}>认知模型</button><button className={tab === 'skill' ? 'active' : ''} onClick={() => switchCreatorTab('skill')}>Skill 与测试</button></div>
+      {tab === 'overview' && <section className="creator-overview-grid"><div className="card creator-panel"><h3>当前进度</h3><dl className="creator-progress-list"><div><dt>待处理作品</dt><dd>{overview?.progress?.discovered || 0}</dd></div><div><dt>转写 / 排队中</dt><dd>{(overview?.progress?.queued || 0) + (overview?.progress?.transcribing || 0)}</dd></div><div><dt>等待认知提取</dt><dd>{overview?.progress?.transcribed || 0}</dd></div><div><dt>提取观点中</dt><dd>{overview?.progress?.analyzing || 0}</dd></div></dl></div><div className="card creator-panel"><h3>同步结果</h3>{overview?.latest_sync ? <p>{overview.latest_sync.status === 'failed' ? overview.latest_sync.error_message || '同步失败' : `最近一次发现 ${overview.latest_sync.discovered_count} 条作品，新增 ${overview.latest_sync.created_count} 条。`}</p> : <p>尚未执行主页同步。也可在“作品”中直接导入视频链接。</p>}</div></section>}
+      {tab === 'videos' && <section className="card creator-panel"><div className="section-heading"><div><h3>作品与处理状态</h3><p>主页同步失败时，可粘贴视频链接清单作为兜底。</p></div></div><form className="creator-import-form" onSubmit={(e) => { e.preventDefault(); const list = urls.split('\n').map(x => x.trim()).filter(Boolean); action(() => api.importCreatorVideos(creator.id, list), `已导入 ${list.length} 个视频链接。`); setUrls('') }}><textarea value={urls} onChange={(e) => setUrls(e.target.value)} placeholder="每行一个抖音视频链接" rows="3" /><button className="secondary" disabled={busy || !urls.trim()}>导入链接</button></form><div className="creator-video-list">{videos.length ? videos.map((video) => <div className="creator-video-row" key={video.id}><div><strong>{video.title || video.video_url}</strong><small>转写：{video.job_status || video.ingest_status} · Insight：{video.insight_status || '未开始'}</small></div><span className="status-pill neutral">{video.ingest_status}</span></div>) : <EmptyState title="暂无作品" text="开始研究同步主页，或导入视频链接清单。" />}</div></section>}
+      {tab === 'profile' && <section className="card creator-panel"><div className="section-heading"><div><h3>认知模型</h3><p>仅从已完成的 Video Insight 中归纳重复出现的规律，并保留证据来源。</p></div>{overview?.latest_profile?.status === 'completed' && <button className="secondary" disabled={busy} onClick={() => action(() => api.createCreatorSkill(creator.id, overview.latest_profile.id), 'Skill 已生成。')}>重新生成 Skill</button>}</div>{runs.length ? <div className="creator-run-list">{runs.map((run) => <div className="creator-video-row" key={run.id}><div><strong>{run.status === 'completed' ? '已完成的认知模型' : `认知模型：${run.status}`}</strong><small>输入视频：{run.input_snapshot?.video_count || 0} · {formatDate(run.created_at)}{run.error_message ? ` · ${run.error_message}` : ''}</small></div><CreatorStatus value={run.status === 'completed' ? 'completed' : run.status === 'failed' ? 'failed' : 'profiling'} /></div>)}</div> : <EmptyState title="尚无认知模型" text="完成一批 Video Insight 后可生成初版模型。" />}</section>}
+      {tab === 'skill' && <section className="creator-overview-grid"><div className="card creator-panel"><h3>Creator Skill</h3>{overview?.latest_skill ? <><p>当前版本 v{overview.latest_skill.version}，基于公开视频提炼的方法论；不冒充创作者本人。</p><button className="secondary skill-download" disabled={busy} onClick={downloadSkill}>{busy ? '正在准备下载…' : '下载 SKILL.md'}</button><button className="secondary" disabled={busy} onClick={() => action(() => api.indexCreator(creator.id), '已开始建立历史视频检索索引。')}>建立 / 重建检索索引</button></> : <p>完成认知模型后，研究运行会自动生成首个 Skill。</p>}</div><div className="card creator-panel creator-playground"><h3>测试 Skill</h3><p>系统会按方法论思考，并检索该博主历史文字稿作为证据。</p><textarea value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="例如：如何判断一家 AI 创业公司是否值得长期关注？" rows="4" /><button className="primary" disabled={busy || !question.trim() || !overview?.latest_skill} onClick={ask}>{busy ? '分析中…' : '按该博主方法分析'}</button>{answer && <div className="creator-answer"><strong>分析结果</strong><p>{answer.answer}</p><small>使用 Skill v{answer.skill_version} · 检索到 {answer.evidence?.length || 0} 条历史证据</small></div>}</div></section>}
+      {message && <Alert type={message.includes('失败') || message.includes('错误') ? 'error' : 'info'}>{message}</Alert>}
+    </>}</div>
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState(Boolean(getToken()))
-  const [tab, setTab] = useState('parse')
+  const [tab, setTab] = useState(() => routeFromLocation().page)
   const [jobs, setJobs] = useState([])
-  const [selectedJobId, setSelectedJobId] = useState(() => taskIdFromPath())
+  const [creators, setCreators] = useState([])
+  const [selectedJobId, setSelectedJobId] = useState(() => routeFromLocation().taskId)
+  const [creatorRoute, setCreatorRoute] = useState(() => {
+    const route = routeFromLocation()
+    return { id: route.creatorId, tab: route.creatorTab }
+  })
   const [settings, setSettings] = useState({ provider: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-v4-flash', temperature: 0.2, custom_prompt: '', api_key_configured: false, api_key_masked: null })
   const [taskDefaults, setTaskDefaults] = useState(null)
   const [storage, setStorage] = useState(null)
@@ -799,15 +1006,24 @@ export default function App() {
   async function refresh() {
     if (!getToken()) return
     try {
-      const [jobData, llmData, healthData, userData, defaultsData, storageData] = await Promise.all([api.jobs(), api.getLLM(), api.health(), api.me(), api.getTaskDefaults(), api.getStorage()])
-      setJobs(jobData); setSettings(llmData); setHealth(healthData); setUsername(userData.username || '管理员'); setTaskDefaults(defaultsData); setStorage(storageData); setGlobalError('')
+      const [jobData, llmData, healthData, userData, defaultsData, storageData, creatorData] = await Promise.all([api.jobs(), api.getLLM(), api.health(), api.me(), api.getTaskDefaults(), api.getStorage(), api.creators()])
+      setJobs(jobData); setSettings(llmData); setHealth(healthData); setUsername(userData.username || '管理员'); setTaskDefaults(defaultsData); setStorage(storageData); setCreators(creatorData); setGlobalError('')
     } catch (err) { setGlobalError(err.message) }
   }
 
   async function refreshHealth() {
     try { setHealth(await api.health()) } catch (err) { setGlobalError(err.message) }
   }
-  async function refreshStorage() { try { setStorage(await api.getStorage()) } catch (err) { setGlobalError(err.message) } }
+  async function refreshStorage() {
+    try {
+      const next = await api.getStorage()
+      setStorage(next)
+      return next
+    } catch (err) {
+      setGlobalError(err.message)
+      throw err
+    }
+  }
 
   useEffect(() => {
     function expired() { setAuthenticated(false) }
@@ -817,7 +1033,12 @@ export default function App() {
 
   useEffect(() => { if (authenticated) refresh() }, [authenticated])
   useEffect(() => {
-    function handlePopState() { setSelectedJobId(taskIdFromPath()); if (taskIdFromPath()) setTab('history') }
+    function handlePopState() {
+      const route = routeFromLocation()
+      setTab(route.page)
+      setSelectedJobId(route.taskId)
+      setCreatorRoute({ id: route.creatorId, tab: route.creatorTab })
+    }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
@@ -829,21 +1050,35 @@ export default function App() {
 
   if (!authenticated) return <Login onLogin={() => { setAuthenticated(true); refresh() }} />
 
-  function navigate(next) { window.history.pushState({}, '', '/'); setSelectedJobId(null); setTab(next) }
+  function navigate(next) {
+    window.history.pushState({}, '', pathForPage(next))
+    setSelectedJobId(null)
+    setCreatorRoute({ id: null, tab: 'overview' })
+    setTab(next)
+  }
   function openJob(id) { window.history.pushState({}, '', `/tasks/${encodeURIComponent(id)}`); setSelectedJobId(id); setTab('history') }
+  function openCreator(id, creatorTab = 'overview') {
+    const safeTab = CREATOR_TABS.has(creatorTab) ? creatorTab : 'overview'
+    const query = safeTab === 'overview' ? '' : `?tab=${encodeURIComponent(safeTab)}`
+    window.history.pushState({}, '', `/creators/${encodeURIComponent(id)}${query}`)
+    setSelectedJobId(null)
+    setCreatorRoute({ id, tab: safeTab })
+    setTab('creators')
+  }
+  function closeCreator() { navigate('creators') }
   const systemOk = Boolean(health?.ffmpeg && health?.ffprobe && health?.ytdlp && health?.database && health?.queue && health?.data_dir_writable)
 
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup sidebar-brand"><Logo /><div><strong>视频 AI 工作台</strong><span>Video AI Studio</span></div></div>
-      <nav className="main-nav"><button className={tab === 'parse' && !selectedJobId ? 'active' : ''} onClick={() => navigate('parse')}><span>◉</span>视频解析</button><button className={tab === 'history' ? 'active' : ''} onClick={() => navigate('history')}><span>▤</span>任务记录{hasActiveJobs && <i className="nav-dot" />}</button></nav>
+      <nav className="main-nav"><button className={tab === 'parse' && !selectedJobId ? 'active' : ''} onClick={() => navigate('parse')}><span>◉</span>视频解析</button><button className={tab === 'history' ? 'active' : ''} onClick={() => navigate('history')}><span>▤</span>任务记录{hasActiveJobs && <i className="nav-dot" />}</button><button className={tab === 'creators' ? 'active' : ''} onClick={() => navigate('creators')}><span>◈</span>博主研究</button></nav>
       <div className="nav-divider" />
       <nav className="main-nav"><button className={tab === 'settings' ? 'active' : ''} onClick={() => navigate('settings')}><span>⚙</span>设置</button><button className={tab === 'help' ? 'active' : ''} onClick={() => navigate('help')}><span>?</span>帮助</button></nav>
       <div className="sidebar-bottom"><button className="system-summary" onClick={() => navigate('settings')}><span className={`health-dot ${systemOk ? 'ok' : 'bad'}`} /><div><strong>{systemOk ? '服务正常' : '服务需检查'}</strong><small>点击查看运行状态</small></div></button></div>
     </aside>
     <main className="content-shell">
       <div className="topbar"><div className="mobile-brand">视频 AI 工作台</div><div className="topbar-actions"><span className={`service-chip ${systemOk ? 'ok' : 'warn'}`}><i />{systemOk ? '服务正常' : '服务异常'}</span><details className="user-menu"><summary>{username} ▾</summary><button onClick={() => navigate('settings')}>账号安全</button><button onClick={() => { setToken(null); setAuthenticated(false) }}>退出登录</button></details><ThemeButton theme={theme} onToggle={() => applyTheme(theme === 'dark' ? 'light' : 'dark')} /></div></div>
-      <div className="content">{globalError && <Alert type="error">{globalError}</Alert>}{selectedJob ? <JobDetail job={selectedJob} llmConfigured={settings.api_key_configured} onBack={() => navigate('history')} onRefresh={refresh} onDelete={async () => { navigate('history'); await refresh() }} /> : tab === 'parse' ? <NewJob jobs={jobs} llmConfigured={settings.api_key_configured} defaults={taskDefaults} onCreated={refresh} onGoSettings={() => navigate('settings')} onOpenJob={openJob} onOpenHistory={() => navigate('history')} /> : tab === 'history' ? <JobHistory jobs={jobs} onOpen={openJob} onRefresh={refresh} /> : tab === 'help' ? <HelpPage /> : <SettingsPage settings={settings} health={health} defaults={taskDefaults} storage={storage} onSaved={setSettings} onDefaultsSaved={setTaskDefaults} onRefreshHealth={refreshHealth} onRefreshStorage={refreshStorage} />}</div>
+      <div className="content">{globalError && <Alert type="error">{globalError}</Alert>}{selectedJob ? <JobDetail job={selectedJob} llmConfigured={settings.api_key_configured} onBack={() => navigate('history')} onRefresh={refresh} onDelete={async () => { navigate('history'); await refresh() }} /> : tab === 'parse' ? <NewJob jobs={jobs} llmConfigured={settings.api_key_configured} defaults={taskDefaults} onCreated={refresh} onGoSettings={() => navigate('settings')} onOpenJob={openJob} onOpenHistory={() => navigate('history')} /> : tab === 'history' ? <JobHistory jobs={jobs} onOpen={openJob} onRefresh={refresh} /> : tab === 'creators' ? <CreatorsPage creators={creators} onRefresh={refresh} selectedCreatorId={creatorRoute.id} selectedCreatorTab={creatorRoute.tab} onOpenCreator={openCreator} onCloseCreator={closeCreator} onChangeCreatorTab={openCreator} /> : tab === 'help' ? <HelpPage /> : <SettingsPage settings={settings} health={health} defaults={taskDefaults} storage={storage} onSaved={setSettings} onDefaultsSaved={setTaskDefaults} onRefreshHealth={refreshHealth} onRefreshStorage={refreshStorage} storageAutoRefreshing={hasActiveJobs} />}</div>
     </main>
   </div>
 }

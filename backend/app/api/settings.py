@@ -1,8 +1,9 @@
 import httpx
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
@@ -19,28 +20,66 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 def _directory_size(path: Path) -> int:
     if not path.exists():
         return 0
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            # A worker may delete a temporary file while statistics are read.
+            continue
+    return total
 
 
-def _storage_stats(db: Session) -> StorageStats:
+def _rag_index_size(db: Session) -> int:
+    """Return the PostgreSQL table plus index size; SQLite/dev mode has none."""
+    try:
+        # A savepoint keeps the request usable when RAG migration 0005 has
+        # not yet been applied in a development database.
+        with db.begin_nested():
+            value = db.execute(text("SELECT pg_total_relation_size('creator_corpus_chunks')")).scalar()
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _storage_stats(db: Session, freed_temporary_bytes: int = 0) -> StorageStats:
     settings = get_settings()
     data_dir = settings.data_dir.resolve()
     jobs_dir = data_dir / "jobs"
     uploads_dir = data_dir / "uploads"
+    creators_dir = data_dir / "creators"
     models_dir = Path("/models")
+    profile_dir = settings.douyin_profile_dir
+    task_results = 0
     temporary = 0
     removable = 0
     active_ids = set(db.scalars(select(Job.id).where(Job.status.in_({"queued", "processing", "cancel_requested"}))))
-    for work_dir in jobs_dir.glob("*/work"):
+    for job_dir in (jobs_dir.iterdir() if jobs_dir.exists() else []):
+        if not job_dir.is_dir():
+            continue
+        work_dir = job_dir / "work"
+        # Result storage and transient work are intentionally mutually
+        # exclusive, so the UI does not count the same bytes twice.
+        for item in job_dir.rglob("*"):
+            try:
+                if item.is_file() and work_dir not in item.parents:
+                    task_results += item.stat().st_size
+            except OSError:
+                continue
         size = _directory_size(work_dir)
         temporary += size
-        if work_dir.parent.name not in active_ids:
+        if job_dir.name not in active_ids:
             removable += size
     disk_free = shutil.disk_usage(data_dir).free
     return StorageStats(
-        data_dir=str(data_dir), total_bytes=_directory_size(data_dir), jobs_bytes=_directory_size(jobs_dir),
-        uploads_bytes=_directory_size(uploads_dir), models_bytes=_directory_size(models_dir), temporary_bytes=temporary,
-        disk_free_bytes=disk_free, removable_temporary_bytes=removable,
+        data_dir=str(data_dir), total_bytes=_directory_size(data_dir),
+        task_results_bytes=task_results, jobs_bytes=task_results + temporary,
+        uploads_bytes=_directory_size(uploads_dir), creator_artifacts_bytes=_directory_size(creators_dir),
+        rag_index_bytes=_rag_index_size(db), playwright_profile_bytes=_directory_size(profile_dir),
+        models_bytes=_directory_size(models_dir), temporary_bytes=temporary, disk_free_bytes=disk_free,
+        removable_temporary_bytes=removable, freed_temporary_bytes=freed_temporary_bytes,
+        measured_at=datetime.now(timezone.utc),
     )
 
 
@@ -65,6 +104,7 @@ def put_llm_settings(
         api_key=payload.api_key,
         temperature=payload.temperature,
         custom_prompt=payload.custom_prompt,
+        embedding_model=payload.embedding_model,
         clear_api_key=payload.clear_api_key,
     )
     return LLMSettingsOut(**llm_public_view(db))
@@ -112,9 +152,11 @@ def get_storage(_: User = Depends(current_user), db: Session = Depends(get_db)) 
 
 @router.delete("/storage/temporary", response_model=StorageStats)
 def clean_temporary(_: User = Depends(current_user), db: Session = Depends(get_db)) -> StorageStats:
+    before = _storage_stats(db)
     settings = get_settings()
     active_ids = set(db.scalars(select(Job.id).where(Job.status.in_({"queued", "processing", "cancel_requested"}))))
     for work_dir in (settings.data_dir / "jobs").glob("*/work"):
         if work_dir.parent.name not in active_ids:
             shutil.rmtree(work_dir, ignore_errors=True)
-    return _storage_stats(db)
+    after = _storage_stats(db)
+    return after.model_copy(update={"freed_temporary_bytes": max(0, before.removable_temporary_bytes - after.removable_temporary_bytes)})

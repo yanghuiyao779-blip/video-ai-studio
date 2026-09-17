@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg nodejs libgomp1 ca-certificates \
@@ -14,6 +15,10 @@ COPY pyproject.toml alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 RUN pip install --no-cache-dir .
+# Browser-backed creator discovery reuses the server-side Netscape cookie file
+# in an isolated context. Install Chromium during image build, never at runtime.
+RUN playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /data /models \
