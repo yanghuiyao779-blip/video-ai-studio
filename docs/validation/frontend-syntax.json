@@ -1,0 +1,6 @@
+{
+  "kind": "Syntax and relative import checks only; not a Vite production build",
+  "files": 18,
+  "diagnostics": [],
+  "missingRelativeImports": []
+}

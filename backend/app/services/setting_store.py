@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret

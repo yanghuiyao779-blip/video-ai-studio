@@ -16,6 +16,8 @@ celery_app.conf.update(
     result_serializer="json",
     accept_content=["json"],
     timezone="UTC",
+    task_routes={"video_ai.assistant_run": {"queue": "assistant"},
+                 "video_ai.index_video": {"queue": "assistant"}},
 )
 
 
@@ -23,6 +25,12 @@ celery_app.conf.update(
 def process_job_task(job_id: str) -> None:
     from app.services.pipeline import process_job
     process_job(job_id)
+    # This task failure cannot alter the already committed media Job result.
+    try:
+        index_video_task.delay(job_id)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Index dispatch deferred for %s", job_id)
     from app.services.creator_intelligence import mark_creator_job_transcribed
 
     creator_video_ids = mark_creator_job_transcribed(job_id)
@@ -85,3 +93,17 @@ def start_creator_research_task(research_run_id: str) -> None:
 def advance_creator_research_task(research_run_id: str) -> None:
     from app.services.creator_intelligence import advance_creator_research
     advance_creator_research(research_run_id)
+
+
+@celery_app.task(name="video_ai.assistant_run", autoretry_for=(), acks_late=True)
+def assistant_run_task(run_id: str) -> None:
+    from app.services.assistant_runner import process_run
+    from app.services.assistant_service import recover_stale_runs
+    recover_stale_runs()
+    process_run(run_id)
+
+
+@celery_app.task(name="video_ai.index_video", autoretry_for=(), acks_late=True)
+def index_video_task(job_id: str) -> None:
+    from app.services.video_knowledge import index_video
+    index_video(job_id)

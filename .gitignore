@@ -12,6 +12,7 @@ backend/data/
 backend/*.db
 data/
 models/
+backups/
 *.cookies.txt
 cookies.txt
 .DS_Store

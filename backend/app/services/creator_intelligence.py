@@ -7,11 +7,9 @@ import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 from uuid import uuid4
 
 import yt_dlp
-import httpx
 import redis
 from sqlalchemy import func, select
 from sqlalchemy import text
@@ -27,7 +25,7 @@ from app.services.chunking import chunk_segments
 from app.services.llm import OpenAICompatibleLLM
 from app.services.platforms import detect_platform, validate_public_url
 from app.services.setting_store import get_llm_config
-from app.services.douyin_resolver import CreatorIdentity, resolve_douyin_creator
+from app.services.douyin_resolver import resolve_douyin_creator
 
 INSIGHT_EXTRACTOR_VERSION = "v1"
 PROFILE_PROMPT_VERSION = "v1"
@@ -242,7 +240,9 @@ def sync_creator(sync_run_id: str) -> None:
         creator = db.get(Creator, run.creator_id)
         if not creator:
             return
-        run.status = "processing"; creator.status = "syncing"; db.commit()
+        run.status = "processing"
+        creator.status = "syncing"
+        db.commit()
         profile_url = creator.canonical_url or creator.profile_url
         sec_user_id = creator.sec_user_id
     try:
@@ -266,22 +266,34 @@ def sync_creator(sync_run_id: str) -> None:
             for entry in entries:
                 entry_url = entry.get("webpage_url") or entry.get("url")
                 entry_id = str(entry.get("id") or "")
-                if entry_url and not entry_url.startswith("http") and entry_id.isdigit(): entry_url = f"https://www.douyin.com/video/{entry_id}"
-                if entry_url and entry_url.startswith("http"): urls.append(str(entry_url))
+                if entry_url and not entry_url.startswith("http") and entry_id.isdigit():
+                    entry_url = f"https://www.douyin.com/video/{entry_id}"
+                if entry_url and entry_url.startswith("http"):
+                    urls.append(str(entry_url))
         with SessionLocal() as db:
-            run = db.get(CreatorSyncRun, sync_run_id); creator = db.get(Creator, run.creator_id) if run else None
+            run = db.get(CreatorSyncRun, sync_run_id)
+            creator = db.get(Creator, run.creator_id) if run else None
             if not run or not creator:
                 return
             added = import_video_urls(db, creator, urls) if urls else 0
-            run.discovered_count = len(urls); run.created_count = added; run.cursor = completion_reason; run.status = "completed"; run.completed_at = _now()
-            creator.status = "ready"; creator.last_synced_at = _now(); db.commit()
+            run.discovered_count = len(urls)
+            run.created_count = added
+            run.cursor = completion_reason
+            run.status = "completed"
+            run.completed_at = _now()
+            creator.status = "ready"
+            creator.last_synced_at = _now()
+            db.commit()
     except Exception as exc:
         with SessionLocal() as db:
             run = db.get(CreatorSyncRun, sync_run_id)
             if run:
-                run.status = "failed"; run.error_message = str(exc)[-2000:]; run.completed_at = _now()
+                run.status = "failed"
+                run.error_message = str(exc)[-2000:]
+                run.completed_at = _now()
                 creator = db.get(Creator, run.creator_id)
-                if creator: creator.status = "ready"
+                if creator:
+                    creator.status = "ready"
                 db.commit()
 
 
@@ -308,7 +320,9 @@ def create_research_run(
         target_video_limit=target_video_limit,
         failure_threshold_percent=failure_threshold_percent,
     )
-    db.add(run); db.commit(); db.refresh(run)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
     return run
 
 
@@ -340,7 +354,8 @@ def update_research_controls(
         run.failure_threshold_percent = None
     elif failure_threshold_percent is not None:
         run.failure_threshold_percent = failure_threshold_percent
-    db.commit(); db.refresh(run)
+    db.commit()
+    db.refresh(run)
     return run
 
 
@@ -404,8 +419,11 @@ def start_creator_research(research_run_id: str) -> None:
         if not creator:
             return
         sync_run = CreatorSyncRun(creator_id=creator.id, status="queued")
-        db.add(sync_run); db.flush()
-        run.sync_run_id = sync_run.id; run.status = "syncing"; run.error_message = None
+        db.add(sync_run)
+        db.flush()
+        run.sync_run_id = sync_run.id
+        run.status = "syncing"
+        run.error_message = None
         db.commit()
         auto_continue = run.auto_continue
     sync_creator(sync_run.id)
@@ -415,9 +433,13 @@ def start_creator_research(research_run_id: str) -> None:
         if not run:
             return
         if sync_run is None or sync_run.status == "failed":
-            run.status = "failed"; run.error_message = (sync_run.error_message if sync_run else "主页同步任务丢失")
-            run.completed_at = _now(); db.commit(); return
-        run.status = "ready_to_process"; db.commit()
+            run.status = "failed"
+            run.error_message = (sync_run.error_message if sync_run else "主页同步任务丢失")
+            run.completed_at = _now()
+            db.commit()
+            return
+        run.status = "ready_to_process"
+        db.commit()
     if auto_continue:
         advance_creator_research(research_run_id)
 
@@ -443,11 +465,15 @@ def advance_creator_research(research_run_id: str) -> None:
                 return
             progress = _research_progress(db, run)
             if progress["queued"] or progress["transcribing"]:
-                run.status = "transcribing"; db.commit(); return
+                run.status = "transcribing"
+                db.commit()
+                return
             if progress["transcribed"] or progress["analyzing"]:
                 # `process_job_task` schedules Insight extraction immediately.
                 # Do not enqueue a second extraction call here.
-                run.status = "analyzing"; db.commit(); return
+                run.status = "analyzing"
+                db.commit()
+                return
 
             attempted = progress["analyzed"] + progress["failed"]
             minimum_sample = min(run.batch_size, run.dispatched_count)
@@ -475,7 +501,8 @@ def advance_creator_research(research_run_id: str) -> None:
             )) or 0
             if discovered and (remaining is None or remaining > 0):
                 limit = min(run.batch_size, remaining) if remaining is not None else run.batch_size
-                run.status = "transcribing"; db.commit()
+                run.status = "transcribing"
+                db.commit()
                 dispatch_creator_jobs(creator.id, limit, research_run_id=run.id)
                 return
 
@@ -485,7 +512,8 @@ def advance_creator_research(research_run_id: str) -> None:
                 ).order_by(CreatorAnalysisRun.created_at.desc()))
                 if profile is None or profile.status == "failed":
                     profile = CreatorAnalysisRun(creator_id=creator.id, status="queued")
-                    db.add(profile); db.flush()
+                    db.add(profile)
+                    db.flush()
                 run.analysis_run_id = profile.id
                 if profile.status == "completed":
                     skill = db.scalar(select(CreatorSkillVersion).where(
@@ -493,8 +521,12 @@ def advance_creator_research(research_run_id: str) -> None:
                     ))
                     if skill is None:
                         build_skill(db, profile)
-                    run.status = "completed"; run.completed_at = _now(); db.commit(); return
-                run.status = "profiling"; db.commit()
+                    run.status = "completed"
+                    run.completed_at = _now()
+                    db.commit()
+                    return
+                run.status = "profiling"
+                db.commit()
                 from app.workers.celery_app import build_creator_profile_task
                 build_creator_profile_task.delay(profile.id)
                 return
@@ -510,7 +542,9 @@ def pause_creator_research(db: Session, research_run_id: str) -> CreatorResearch
     if run is None:
         raise ValueError("研究任务不存在")
     if run.status not in {"completed", "failed"}:
-        run.status = "paused"; db.commit(); db.refresh(run)
+        run.status = "paused"
+        db.commit()
+        db.refresh(run)
     return run
 
 
@@ -544,7 +578,10 @@ def dispatch_creator_jobs(creator_id: str, limit: int = 3, research_run_id: str 
         # creating two Jobs for the same source video.
         videos = list(db.scalars(statement.order_by(CreatorVideo.created_at).limit(limit).with_for_update(skip_locked=True)))
         for video in videos:
+            from app.db.models import User
+            owner_id = db.scalar(select(User.id).where(User.username == settings.admin_username))
             job = Job(
+                owner_id=owner_id,
                 id=str(uuid4()), source_url=video.video_url, source_type="url",
                 platform=video.platform, title=video.title, asr_model=settings.asr_model,
                 # The structured insight is the LLM work for creator batches;
@@ -552,8 +589,10 @@ def dispatch_creator_jobs(creator_id: str, limit: int = 3, research_run_id: str 
                 summary_enabled=False, summary_language="Chinese", summary_preset="transcript",
                 status="queued", stage="queued", progress=0,
             )
-            db.add(job); db.flush()
-            video.job_id = job.id; video.ingest_status = "queued"
+            db.add(job)
+            db.flush()
+            video.job_id = job.id
+            video.ingest_status = "queued"
             if research_run_id:
                 video.research_run_id = research_run_id
         if research_run_id:
@@ -634,7 +673,10 @@ def analyze_video_insight(creator_video_id: str) -> None:
         if not insight:
             insight = VideoInsight(creator_video_id=video.id, job_id=job.id, transcript_hash=transcript_hash, extractor_version=INSIGHT_EXTRACTOR_VERSION)
             db.add(insight)
-        insight.status = "processing"; insight.error_message = None; video.ingest_status = "analyzing"; db.commit()
+        insight.status = "processing"
+        insight.error_message = None
+        video.ingest_status = "analyzing"
+        db.commit()
         insight_id = insight.id
         config = get_llm_config(db)
     try:
@@ -647,14 +689,23 @@ def analyze_video_insight(creator_video_id: str) -> None:
                 partials.append(_complete_json(client, INSIGHT_SYSTEM, f"{INSIGHT_TASK}\n片段 {index}/{len(chunks)}：\n{chunk}"))
             merged = _complete_json(client, INSIGHT_SYSTEM, f"{INSIGHT_TASK}\n合并以下分段提取，去重且保留证据：\n{json.dumps(partials, ensure_ascii=False)}")
         with SessionLocal() as db:
-            insight = db.get(VideoInsight, insight_id); video = db.get(CreatorVideo, creator_video_id)
+            insight = db.get(VideoInsight, insight_id)
+            video = db.get(CreatorVideo, creator_video_id)
             if insight and video:
-                insight.status = "completed"; insight.insight_json = json.dumps(merged, ensure_ascii=False); insight.completed_at = _now(); video.ingest_status = "analyzed"; db.commit()
+                insight.status = "completed"
+                insight.insight_json = json.dumps(merged, ensure_ascii=False)
+                insight.completed_at = _now()
+                video.ingest_status = "analyzed"
+                db.commit()
     except Exception as exc:
         with SessionLocal() as db:
-            insight = db.get(VideoInsight, insight_id); video = db.get(CreatorVideo, creator_video_id)
-            if insight: insight.status = "failed"; insight.error_message = str(exc)[-2000:]
-            if video: video.ingest_status = "insight_failed"
+            insight = db.get(VideoInsight, insight_id)
+            video = db.get(CreatorVideo, creator_video_id)
+            if insight:
+                insight.status = "failed"
+                insight.error_message = str(exc)[-2000:]
+            if video:
+                video.ingest_status = "insight_failed"
             db.commit()
     finally:
         if creator_id:
@@ -668,42 +719,58 @@ PROFILE_TASK = """Return {worldview:[{statement,scope,evidence}], first_principl
 def build_creator_profile(analysis_run_id: str) -> None:
     with SessionLocal() as db:
         run = db.get(CreatorAnalysisRun, analysis_run_id)
-        if not run: return
-        run.status = "processing"; db.commit()
+        if not run:
+            return
+        run.status = "processing"
+        db.commit()
         rows = list(db.execute(select(VideoInsight, CreatorVideo).join(CreatorVideo).where(
             CreatorVideo.creator_id == run.creator_id, VideoInsight.status == "completed"
         )))
         items = [{"video_id": video.id, "title": video.title, "insight": _json(insight.insight_json, {})} for insight, video in rows]
-        run.input_snapshot_json = json.dumps({"video_count": len(items), "video_ids": [x["video_id"] for x in items]}, ensure_ascii=False); db.commit()
+        run.input_snapshot_json = json.dumps({"video_count": len(items), "video_ids": [x["video_id"] for x in items]}, ensure_ascii=False)
+        db.commit()
         config = get_llm_config(db)
     try:
-        if not items: raise RuntimeError("尚无已完成的 Video Insight")
-        if config is None: raise RuntimeError("尚未配置 AI API Key")
+        if not items:
+            raise RuntimeError("尚无已完成的 Video Insight")
+        if config is None:
+            raise RuntimeError("尚未配置 AI API Key")
         serialized = [json.dumps(item, ensure_ascii=False) for item in items]
         groups, current, size = [], [], 0
         for item in serialized:
-            if current and size + len(item) > 24000: groups.append(current); current, size = [], 0
-            current.append(item); size += len(item)
-        if current: groups.append(current)
+            if current and size + len(item) > 24000:
+                groups.append(current)
+                current, size = [], 0
+            current.append(item)
+            size += len(item)
+        if current:
+            groups.append(current)
         with OpenAICompatibleLLM(config) as client:
             patterns = [_complete_json(client, PROFILE_SYSTEM, f"{PROFILE_TASK}\n候选视频洞见：\n" + "\n".join(group)) for group in groups]
             profile = _complete_json(client, PROFILE_SYSTEM, f"{PROFILE_TASK}\n归并以下主题模式：\n{json.dumps(patterns, ensure_ascii=False)}")
         with SessionLocal() as db:
             run = db.get(CreatorAnalysisRun, analysis_run_id)
             if run:
-                run.status = "completed"; run.profile_json = json.dumps(profile, ensure_ascii=False); run.completed_at = _now()
+                run.status = "completed"
+                run.profile_json = json.dumps(profile, ensure_ascii=False)
+                run.completed_at = _now()
                 research_runs = list(db.scalars(select(CreatorResearchRun).where(
                     CreatorResearchRun.analysis_run_id == run.id,
                     CreatorResearchRun.status == "profiling",
                 )))
                 for research in research_runs:
                     build_skill(db, run)
-                    research.status = "completed"; research.completed_at = _now()
+                    research.status = "completed"
+                    research.completed_at = _now()
                 db.commit()
     except Exception as exc:
         with SessionLocal() as db:
             run = db.get(CreatorAnalysisRun, analysis_run_id)
-            if run: run.status = "failed"; run.error_message = str(exc)[-2000:]; run.completed_at = _now(); db.commit()
+            if run:
+                run.status = "failed"
+                run.error_message = str(exc)[-2000:]
+                run.completed_at = _now()
+                db.commit()
 
 
 def build_skill(db: Session, analysis_run: CreatorAnalysisRun) -> CreatorSkillVersion:
@@ -716,32 +783,28 @@ def build_skill(db: Session, analysis_run: CreatorAnalysisRun) -> CreatorSkillVe
         return "\n".join(f"- {x.get(key, x) if isinstance(x, dict) else x}" for x in items) or "- 暂无足够证据"
     markdown = f"""# {creator.name or '创作者'}公开内容方法论\n\n> 基于公开视频内容提炼，不代表创作者本人，不应将其作为身份模仿或专业建议。\n\n## 使用方式\n\n1. 先界定真实问题与隐含假设。\n2. 仅在适用领域使用下列原则和规则。\n3. 区分事实、判断与预测，并说明不确定性。\n4. 不足以支持结论时，明确说明证据不足。\n\n## 第一性原则\n{bullets(profile.get('first_principles', []))}\n\n## 判断规则\n{bullets(profile.get('decision_rules', []))}\n\n## 常用框架\n{bullets(profile.get('frameworks', []), 'name')}\n\n## 推理与表达\n{bullets(profile.get('reasoning_pattern', []))}\n{bullets(profile.get('communication_style', []))}\n\n## 边界与反模式\n{bullets(profile.get('boundaries_and_failure_modes', []))}\n\n详细证据须在运行时从该创作者的视频洞见与文字稿中检索，不将完整视频原文写入本 Skill。\n"""
     root = get_settings().data_dir / "creators" / creator.id / "skills" / f"v{version}"
-    refs = root / "references"; refs.mkdir(parents=True, exist_ok=True)
+    refs = root / "references"
+    refs.mkdir(parents=True, exist_ok=True)
     (root / "SKILL.md").write_text(markdown, encoding="utf-8")
     (refs / "profile.json").write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
     skill = CreatorSkillVersion(creator_id=creator.id, analysis_run_id=analysis_run.id, version=version, skill_markdown=markdown, artifact_dir=str(root))
-    db.add(skill); db.commit(); db.refresh(skill)
+    db.add(skill)
+    db.commit()
+    db.refresh(skill)
     return skill
 
 
 def _embed(config, inputs: list[str]) -> list[list[float]]:
-    if not config.embedding_model:
-        raise RuntimeError("请先在 AI 设置中填写 Embedding 模型，例如 text-embedding-3-small")
-    endpoint = f"{config.base_url.rstrip('/')}/embeddings"
-    response = httpx.post(endpoint, headers={"Authorization": f"Bearer {config.api_key}"}, json={"model": config.embedding_model, "input": inputs}, timeout=get_settings().llm_timeout_seconds)
-    response.raise_for_status()
-    values = response.json().get("data") or []
-    vectors = [item.get("embedding") for item in values]
-    if len(vectors) != len(inputs) or any(not isinstance(vector, list) or len(vector) != 1536 for vector in vectors):
-        raise RuntimeError("Embedding 服务返回的向量数量或维度无效；当前 pgvector 索引要求 1536 维")
-    return vectors
+    from app.services.embeddings import embed_texts
+    return embed_texts(config, inputs)
 
 
 def index_creator_corpus(creator_id: str) -> int:
     """Embed transcript chunks. Rebuilding is idempotent and replaces old chunks."""
     with SessionLocal() as db:
         config = get_llm_config(db)
-        if config is None: raise RuntimeError("尚未配置 AI API Key")
+        if config is None:
+            raise RuntimeError("尚未配置 AI API Key")
         rows = list(db.scalars(select(CreatorVideo).join(Job, CreatorVideo.job_id == Job.id).where(CreatorVideo.creator_id == creator_id, Job.status == "completed")))
         chunks = []
         for video in rows:
@@ -752,7 +815,8 @@ def index_creator_corpus(creator_id: str) -> int:
                 match = re.search(r"\[(\d\d):(\d\d)(?::(\d\d))?\]", group)
                 seconds = (int(match.group(1)) * 60 + int(match.group(2)) + (int(match.group(3) or 0) * 3600)) if match else first.start
                 chunks.append((video, job, seconds, group))
-        if not chunks: raise RuntimeError("没有可用于检索的已完成文字稿")
+        if not chunks:
+            raise RuntimeError("没有可用于检索的已完成文字稿")
         vectors = _embed(config, [item[3] for item in chunks])
         db.execute(text("DELETE FROM creator_corpus_chunks WHERE creator_id = :creator_id"), {"creator_id": creator_id})
         for (video, job, start, content), vector in zip(chunks, vectors):
@@ -764,12 +828,15 @@ def index_creator_corpus(creator_id: str) -> int:
 def ask_creator(creator_id: str, question: str, top_k: int) -> dict:
     with SessionLocal() as db:
         config = get_llm_config(db)
-        if config is None: raise RuntimeError("尚未配置 AI API Key")
+        if config is None:
+            raise RuntimeError("尚未配置 AI API Key")
         vector = _embed(config, [question])[0]
         rows = db.execute(text("SELECT creator_video_id, job_id, start_seconds, content, 1 - (embedding <=> CAST(:embedding AS vector)) AS score FROM creator_corpus_chunks WHERE creator_id = :creator_id ORDER BY embedding <=> CAST(:embedding AS vector) LIMIT :limit"), {"creator_id": creator_id, "embedding": "[" + ",".join(str(float(x)) for x in vector) + "]", "limit": top_k}).mappings().all()
-        if not rows: raise RuntimeError("尚未建立向量索引，请先执行索引构建")
+        if not rows:
+            raise RuntimeError("尚未建立向量索引，请先执行索引构建")
         skill = db.scalar(select(CreatorSkillVersion).where(CreatorSkillVersion.creator_id == creator_id).order_by(CreatorSkillVersion.version.desc()))
-        if skill is None: raise RuntimeError("尚未生成 Skill")
+        if skill is None:
+            raise RuntimeError("尚未生成 Skill")
         evidence = [{"video_id": row["creator_video_id"], "job_id": row["job_id"], "timestamp": row["start_seconds"], "score": round(float(row["score"]), 4), "excerpt": row["content"][:800]} for row in rows]
         prompt = f"""基于下列方法论和历史证据回答问题。不能冒充创作者；区分事实、推断和不确定性。结尾列出所用证据的视频 ID 与时间点。\n\n方法论：\n{skill.skill_markdown}\n\n问题：{question}\n\n历史证据：\n{json.dumps(evidence, ensure_ascii=False)}"""
     with OpenAICompatibleLLM(config) as client:

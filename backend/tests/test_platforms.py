@@ -72,6 +72,7 @@ def test_still_rejects_private_ip_for_supported_platform(monkeypatch):
 
 
 def test_normalizes_chinese_transcript_to_simplified():
+    pytest.importorskip("opencc", reason="Install the declared opencc dependency to run normalization tests")
     assert normalize_simplified_chinese("簡歷裡寫著微調與資料", "zh") == "简历里写着微调与数据"
     assert normalize_simplified_chinese("怎幺清洗？什幺项目？", "zh") == "怎么清洗？什么项目？"
     assert normalize_simplified_chinese("麻将里的幺鸡", "zh") == "麻将里的幺鸡"

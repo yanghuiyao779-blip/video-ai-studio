@@ -28,4 +28,5 @@ class DiscoveryPage:
 class DouyinCreatorProvider(Protocol):
     """A provider receives a verified sec_user_id, never /user/self."""
 
-    def list_videos(self, sec_user_id: str, cursor: str | None = None) -> DiscoveryPage: ...
+    def list_videos(self, sec_user_id: str, cursor: str | None = None) -> DiscoveryPage:
+        ...

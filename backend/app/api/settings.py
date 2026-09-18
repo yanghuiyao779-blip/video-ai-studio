@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
+from app.services.assistant_access import deployment_admin
 from app.api.schemas import LLMSettingsIn, LLMSettingsOut, LLMTestResponse, StorageStats, TaskDefaults
 from app.core.config import get_settings
 from app.db.models import Job, User
@@ -14,7 +15,7 @@ from app.db.session import get_db
 from app.services.llm import OpenAICompatibleLLM
 from app.services.setting_store import get_llm_config, llm_public_view, task_defaults_public_view, update_llm_config, update_task_defaults
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(dependencies=[Depends(deployment_admin)], prefix="/settings", tags=["settings"])
 
 
 def _directory_size(path: Path) -> int:

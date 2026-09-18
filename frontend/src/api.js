@@ -9,7 +9,7 @@ export function setToken(token) {
   else sessionStorage.removeItem(TOKEN_KEY)
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {})
   const token = getToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -67,7 +67,7 @@ function uploadRequest(formData, onProgress) {
   })
 }
 
-async function authenticatedBlob(path) {
+export async function authenticatedBlob(path) {
   const token = getToken()
   const response = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
   if (!response.ok) {

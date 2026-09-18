@@ -11,6 +11,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
+from app.services.assistant_access import permitted_job, job_visibility
+from sqlalchemy import select
 from app.api.schemas import (
     JobCreate,
     JobResummarizeRequest,
@@ -23,9 +25,8 @@ from app.api.schemas import (
 from app.core.config import get_settings
 from app.db.models import Job, User
 from app.db.session import get_db
-from app.services.downloader import VideoDownloader
 from app.services.errors import classify_exception
-from app.services.jobs import ARTIFACT_FILES, get_job, list_jobs, serialize_job
+from app.services.jobs import ARTIFACT_FILES, serialize_job, update_job
 from app.services.domain import Transcript, TranscriptSegment
 from app.services.exporters import export_all
 from app.services.platforms import UnsafeURLError, detect_platform, validate_public_url
@@ -77,13 +78,14 @@ def _safe_filename(filename: str | None) -> str:
 @router.post("/preview", response_model=VideoPreviewResponse)
 def preview_video(
     payload: VideoPreviewRequest,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> VideoPreviewResponse:
     source_url = str(payload.source_url)
     try:
         validate_public_url(source_url)
         platform = detect_platform(source_url)
-        preview = VideoDownloader().preview(source_url)
+        from app.services.downloader import VideoDownloader
+        preview = VideoDownloader(allow_server_credentials=user.username == get_settings().admin_username).preview(source_url)
     except UnsafeURLError as exc:
         raise HTTPException(status_code=400, detail="该链接指向受限制的网络地址，无法处理。") from exc
     except Exception as exc:
@@ -110,7 +112,7 @@ async def upload_job(
     summary_language: str = Form("Chinese"),
     summary_preset: str = Form("standard"),
     summary_instruction: str = Form(""),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResponse:
     settings = get_settings()
@@ -152,6 +154,7 @@ async def upload_job(
         raise HTTPException(status_code=400, detail="上传文件为空")
 
     job = Job(
+        owner_id=user.id,
         id=job_id,
         source_url=f"upload://{filename}",
         source_type="upload",
@@ -183,7 +186,7 @@ async def upload_job(
 @router.post("", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 def create_job(
     payload: JobCreate,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResponse:
     source_url = str(payload.source_url)
@@ -194,6 +197,7 @@ def create_job(
     except UnsafeURLError as exc:
         raise HTTPException(status_code=400, detail="该链接指向受限制的网络地址，无法处理。") from exc
     job = Job(
+        owner_id=user.id,
         source_url=source_url,
         source_type="url",
         language=payload.language or None,
@@ -219,19 +223,19 @@ def create_job(
 @router.get("", response_model=list[JobResponse])
 def get_jobs(
     limit: int = Query(default=100, ge=1, le=200),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[JobResponse]:
-    return [JobResponse(**serialize_job(job)) for job in list_jobs(db, limit=limit)]
+    return [JobResponse(**serialize_job(job)) for job in db.scalars(select(Job).where(job_visibility(db, user)).order_by(Job.created_at.desc()).limit(limit))]
 
 
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job_detail(
     job_id: str,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResponse:
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     return JobResponse(**serialize_job(job))
@@ -240,10 +244,10 @@ def get_job_detail(
 @router.get("/{job_id}/result", response_model=JobResultResponse)
 def get_job_result(
     job_id: str,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResultResponse:
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user)
     if job is None or not job.output_dir:
         raise HTTPException(status_code=404, detail="任务结果不存在")
     root = Path(job.output_dir).resolve()
@@ -264,13 +268,15 @@ def get_job_result(
 def update_transcript(
     job_id: str,
     payload: TranscriptUpdateRequest,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResultResponse:
     """Persist user corrections and regenerate exports without rerunning ASR."""
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user, write=True)
     if job is None or not job.output_dir:
         raise HTTPException(status_code=404, detail="任务结果不存在")
+    if job.status in {"queued", "processing", "cancel_requested"}:
+        raise HTTPException(status_code=409, detail="Wait for media processing before editing the transcript")
     root = Path(job.output_dir).resolve()
     allowed_root = (get_settings().data_dir / "jobs").resolve()
     result_path = root / "result.json"
@@ -296,6 +302,9 @@ def update_transcript(
     export_all(root, job.source_url, str(saved.get("platform") or job.platform or "generic"), str(saved.get("title") or job.title or "视频解析"), metadata, transcript, None)
     metadata = {**metadata, "transcript_edited": True, "summary_stale": bool(saved.get("summary"))}
     update_job(db, job.id, summary_excerpt=None, metadata_json=json.dumps(metadata, ensure_ascii=False))
+    from app.services.video_knowledge import invalidate_index
+    invalidate_index(db, job.id)
+    db.commit()
     refreshed = json.loads(result_path.read_text(encoding="utf-8"))
     return JobResultResponse(**refreshed)
 
@@ -303,10 +312,10 @@ def update_transcript(
 @router.post("/{job_id}/cancel", response_model=JobResponse)
 def cancel_job(
     job_id: str,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResponse:
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user, write=True)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status not in {"queued", "processing", "cancel_requested"}:
@@ -329,16 +338,18 @@ def cancel_job(
 @router.post("/{job_id}/retry", response_model=JobResponse)
 def retry_job(
     job_id: str,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResponse:
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user, write=True)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status not in {"failed", "completed", "cancelled"}:
         raise HTTPException(status_code=409, detail="只有失败、已取消或已完成的任务可以重新执行")
     if job.source_type == "upload" and (not job.source_path or not Path(job.source_path).is_file()):
         raise HTTPException(status_code=409, detail="本地源文件已清理，不能重新执行完整流程；已完成任务仍可重新生成 AI 摘要。")
+    from app.services.video_knowledge import invalidate_index
+    invalidate_index(db, job.id)
     job.status = "queued"
     job.stage = "queued"
     job.progress = 0
@@ -358,10 +369,10 @@ def retry_job(
 def resummarize_job(
     job_id: str,
     payload: JobResummarizeRequest,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobResponse:
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user, write=True)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status not in {"completed", "failed"} or not job.output_dir:
@@ -396,13 +407,13 @@ def resummarize_job(
 def download_artifact(
     job_id: str,
     artifact_name: str,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     filename = ARTIFACT_FILES.get(artifact_name)
     if filename is None:
         raise HTTPException(status_code=404, detail="未知文件类型")
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user)
     if job is None or not job.output_dir:
         raise HTTPException(status_code=404, detail="文件不存在")
     root = Path(job.output_dir).resolve()
@@ -418,10 +429,10 @@ def download_artifact(
 @router.delete("/{job_id}", status_code=204)
 def delete_job(
     job_id: str,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    job = get_job(db, job_id)
+    job = permitted_job(db, job_id, user, write=True)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status in {"queued", "processing", "cancel_requested"}:

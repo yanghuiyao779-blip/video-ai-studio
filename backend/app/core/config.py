@@ -51,6 +51,19 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 300
     llm_max_chunk_chars: int = 12000
 
+    assistant_max_context_chars: int = Field(default=40000, ge=4000, le=160000)
+    assistant_history_chars: int = Field(default=24000, ge=2000, le=100000)
+    assistant_run_lease_seconds: int = Field(default=900, ge=60)
+    assistant_max_wait_seconds: int = Field(default=21600, ge=60)
+    assistant_max_resources: int = Field(default=20, ge=1, le=100)
+    assistant_web_api_key: str = ""
+    assistant_vision_model: str = ""
+    assistant_vision_base_url: str = ""
+    assistant_vision_api_key: str = ""
+    assistant_capture_frames: bool = False
+    assistant_max_frames: int = Field(default=6, ge=1, le=12)
+    assistant_agent_max_steps: int = Field(default=4, ge=1, le=6)
+
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
 
     @property

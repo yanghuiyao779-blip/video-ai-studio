@@ -35,6 +35,8 @@ def run() -> None:
                 resummarize_job(job_id)
             else:
                 process_job(job_id)
+                from app.services.video_knowledge import index_video
+                index_video(job_id)
                 mark_creator_job_transcribed(job_id)
         else:
             with SessionLocal() as db:

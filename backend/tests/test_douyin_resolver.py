@@ -1,4 +1,16 @@
 import app.services.douyin_resolver as resolver
+import socket
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def public_dns_for_resolver_unit_tests(monkeypatch):
+    # URL safety has its own tests. Identity parsing must not depend on live DNS.
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))
+    ])
+
+
 
 
 def test_canonical_profile_never_treats_sec_uid_as_self():

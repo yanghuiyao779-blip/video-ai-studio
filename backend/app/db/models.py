@@ -32,6 +32,8 @@ class AppSetting(Base):
 class Job(Base):
     __tablename__ = "jobs"
 
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     source_url: Mapped[str] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(String(20), default="url")
@@ -183,3 +185,6 @@ class CreatorResearchRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+# Register the independent assistant metadata without changing media models.
+from app.db import assistant as _assistant_models  # noqa: E402,F401

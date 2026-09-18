@@ -7,7 +7,6 @@ import shutil
 from tempfile import NamedTemporaryFile
 from typing import Callable
 
-import yt_dlp
 
 from app.core.config import get_settings
 from app.services.platforms import detect_platform, normalize_video_url
@@ -29,9 +28,10 @@ class PreviewResult:
 
 
 class VideoDownloader:
-    def __init__(self, progress: ProgressCallback | None = None):
+    def __init__(self, progress: ProgressCallback | None = None, *, allow_server_credentials: bool = True):
         self.settings = get_settings()
         self.progress = progress
+        self.allow_server_credentials = allow_server_credentials
         self._temporary_cookie_file: Path | None = None
 
     def _prepare_writable_cookie_file(self, source: Path) -> Path:
@@ -70,6 +70,10 @@ class VideoDownloader:
             "fragment_retries": 3,
             "socket_timeout": 30,
         }
+        # Ordinary workspace accounts must not inherit the deployment admin's
+        # platform identity. Their URL jobs use anonymous access only.
+        if not self.allow_server_credentials:
+            return options
         # A logged-in persistent Playwright profile is the preferred source for
         # Douyin. Export only a disposable Netscape snapshot for yt-dlp; never
         # hand its browser profile/database to the downloader.
@@ -110,6 +114,7 @@ class VideoDownloader:
         }
 
     def preview(self, url: str) -> PreviewResult:
+        import yt_dlp
         resolved_url = normalize_video_url(url)
         options = self._common_options(resolved_url)
         try:
@@ -135,6 +140,7 @@ class VideoDownloader:
             self.progress(31, "downloaded")
 
     def download(self, url: str, work_dir: Path) -> DownloadResult:
+        import yt_dlp
         resolved_url = normalize_video_url(url)
         work_dir.mkdir(parents=True, exist_ok=True)
         height = self.settings.download_max_height

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -45,12 +46,14 @@ class OpenAICompatibleLLM:
         return self.config.provider == "deepseek" or "api.deepseek.com" in self.config.base_url
 
     def complete(self, system: str, user: str) -> LLMResult:
+        return self.complete_messages([
+            {"role": "system", "content": system}, {"role": "user", "content": user}
+        ])
+
+    def complete_messages(self, messages: list[dict]) -> LLMResult:
         payload = {
             "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "stream": False,
         }
         # Let the provider decide its generation budget. A local max_tokens cap
@@ -115,3 +118,70 @@ class OpenAICompatibleLLM:
             "Return OK.",
         )
         return result.content
+
+    def stream_messages(self, messages: list[dict]):
+        """Yield only final-answer deltas, never hidden reasoning_content.
+
+        No automatic retry after output starts: that would duplicate text and
+        spend tokens twice. The durable ChatRun provides explicit retry instead.
+        """
+        payload = {"model": self.config.model, "messages": messages, "stream": True}
+        if self.is_deepseek:
+            payload.update(thinking={"type": "enabled"}, reasoning_effort="high")
+        else:
+            payload["temperature"] = self.config.temperature
+        headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
+        produced = False
+        finished = False
+        with self.client.stream("POST", self.endpoint, json=payload, headers=headers) as response:
+            if not response.is_success:
+                response.read()
+                response.raise_for_status()
+            if "application/json" in response.headers.get("content-type", ""):
+                # Some compatible servers ignore stream=True.
+                data = json.loads(response.read())
+                choice = data.get("choices", [{}])[0]
+                if choice.get("finish_reason") in {"length", "content_filter"}:
+                    raise RuntimeError("Provider stopped generation before a complete answer")
+                content = choice.get("message", {}).get("content")
+                if not isinstance(content, str) or not content.strip():
+                    raise LLMEmptyContentError("Provider returned no final answer")
+                yield content
+                return
+            event_lines = []
+            for line in response.iter_lines():
+                if line.startswith("data:"):
+                    event_lines.append(line[5:].lstrip())
+                    continue
+                if line or not event_lines:
+                    continue
+                data = "\n".join(event_lines)
+                event_lines = []
+                if data.strip() == "[DONE]":
+                    finished = True
+                    break
+                try:
+                    frame = json.loads(data)
+                    if "error" in frame:
+                        raise RuntimeError("Provider reported a streaming error")
+                    choices = frame.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    content = (choice.get("delta") or {}).get("content")
+                    if isinstance(content, str) and content:
+                        produced = True
+                        yield content
+                    else:
+                        yield ""  # heartbeat only; never persist reasoning_content
+                    reason = choice.get("finish_reason")
+                    if reason in {"length", "content_filter"}:
+                        raise RuntimeError(f"Provider stopped generation: {reason}")
+                    if reason:
+                        finished = True
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("Malformed provider SSE frame") from exc
+        if not produced:
+            raise LLMEmptyContentError("Provider returned no final answer")
+        if not finished:
+            raise RuntimeError("Provider stream closed before completion")

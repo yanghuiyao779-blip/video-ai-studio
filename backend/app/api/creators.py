@@ -10,6 +10,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
+from app.services.assistant_access import deployment_admin
 from app.api.schemas import (
     CreatorAnalysisResponse, CreatorCreate, CreatorPreviewResponse, CreatorResponse, CreatorSkillResponse,
     CreatorVideoImport, CreatorVideoResponse, CreatorAskRequest, CreatorDashboardResponse,
@@ -24,7 +25,7 @@ from app.services.creator_intelligence import (
 )
 from app.services.douyin_resolver import resolve_douyin_creator
 
-router = APIRouter(prefix="/creators", tags=["creators"])
+router = APIRouter(dependencies=[Depends(deployment_admin)], prefix="/creators", tags=["creators"])
 
 
 def _creator_or_404(db: Session, creator_id: str) -> Creator:
@@ -119,7 +120,9 @@ def detail(creator_id: str, _: User = Depends(current_user), db: Session = Depen
 def sync(creator_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     creator = _creator_or_404(db, creator_id)
     run = CreatorSyncRun(creator_id=creator.id, status="queued")
-    db.add(run); db.commit(); db.refresh(run)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
     _enqueue("sync", run.id)
     return {"id": run.id, "status": run.status}
 
@@ -179,7 +182,9 @@ def continue_research(creator_id: str, _: User = Depends(current_user), db: Sess
     if run is None:
         raise HTTPException(status_code=409, detail="没有可继续的研究任务，请先开始研究")
     if run.status == "paused":
-        run.status = "ready_to_process"; db.commit(); db.refresh(run)
+        run.status = "ready_to_process"
+        db.commit()
+        db.refresh(run)
     if get_settings().queue_mode == "celery":
         _enqueue("research_advance", run.id)
     else:
@@ -247,7 +252,9 @@ def create_analysis(creator_id: str, _: User = Depends(current_user), db: Sessio
     if completed is None:
         raise HTTPException(status_code=409, detail="尚无已完成的 Video Insight，请先完成文字稿与认知提取")
     run = CreatorAnalysisRun(creator_id=creator_id, status="queued")
-    db.add(run); db.commit(); db.refresh(run)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
     _enqueue("profile", run.id)
     return _analysis_response(run)
 

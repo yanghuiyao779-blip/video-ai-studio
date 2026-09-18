@@ -1,0 +1,164 @@
+
+> video-ai-studio-frontend@3.0.0 test
+> node --test tests/*.test.mjs
+
+TAP version 13
+# Subtest: media URL recognized: https://www.bilibili.com/video/BV123
+ok 1 - media URL recognized: https://www.bilibili.com/video/BV123
+  ---
+  duration_ms: 2.040609
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://b23.tv/xyz
+ok 2 - media URL recognized: https://b23.tv/xyz
+  ---
+  duration_ms: 0.204426
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://www.youtube.com/watch?v=test
+ok 3 - media URL recognized: https://www.youtube.com/watch?v=test
+  ---
+  duration_ms: 0.25171
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://youtu.be/abc
+ok 4 - media URL recognized: https://youtu.be/abc
+  ---
+  duration_ms: 0.109637
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://www.youtube.com/shorts/abc
+ok 5 - media URL recognized: https://www.youtube.com/shorts/abc
+  ---
+  duration_ms: 0.129614
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://v.douyin.com/aBc/
+ok 6 - media URL recognized: https://v.douyin.com/aBc/
+  ---
+  duration_ms: 0.080033
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://www.douyin.com/video/123
+ok 7 - media URL recognized: https://www.douyin.com/video/123
+  ---
+  duration_ms: 0.162924
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://www.douyin.com/jingxuan?modal_id=123
+ok 8 - media URL recognized: https://www.douyin.com/jingxuan?modal_id=123
+  ---
+  duration_ms: 0.892224
+  type: 'test'
+  ...
+# Subtest: media URL recognized: https://cdn.example.com/file.MP4?signature=abc
+ok 9 - media URL recognized: https://cdn.example.com/file.MP4?signature=abc
+  ---
+  duration_ms: 0.574222
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://www.bilibili.com/
+ok 10 - not auto-downloaded: https://www.bilibili.com/
+  ---
+  duration_ms: 0.381658
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://www.youtube.com/@channel
+ok 11 - not auto-downloaded: https://www.youtube.com/@channel
+  ---
+  duration_ms: 0.172429
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://www.douyin.com/user/self?modal_id=123
+ok 12 - not auto-downloaded: https://www.douyin.com/user/self?modal_id=123
+  ---
+  duration_ms: 0.069021
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://www.douyin.com/user/MS4foo
+ok 13 - not auto-downloaded: https://www.douyin.com/user/MS4foo
+  ---
+  duration_ms: 0.050995
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://docs.example.com/intro
+ok 14 - not auto-downloaded: https://docs.example.com/intro
+  ---
+  duration_ms: 0.125054
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://notbilibili.com/video/123
+ok 15 - not auto-downloaded: https://notbilibili.com/video/123
+  ---
+  duration_ms: 0.044242
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://bilibili.com.evil.example/video/123
+ok 16 - not auto-downloaded: https://bilibili.com.evil.example/video/123
+  ---
+  duration_ms: 0.03653
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: https://user:password@youtu.be/id
+ok 17 - not auto-downloaded: https://user:password@youtu.be/id
+  ---
+  duration_ms: 0.045885
+  type: 'test'
+  ...
+# Subtest: not auto-downloaded: javascript:alert(1)
+ok 18 - not auto-downloaded: javascript:alert(1)
+  ---
+  duration_ms: 0.034931
+  type: 'test'
+  ...
+# Subtest: share text strips punctuation and deduplicates links
+ok 19 - share text strips punctuation and deduplicates links
+  ---
+  duration_ms: 0.154684
+  type: 'test'
+  ...
+# Subtest: SSE preserves UTF-8 across byte splits, CRLF, heartbeat and revisions
+ok 20 - SSE preserves UTF-8 across byte splits, CRLF, heartbeat and revisions
+  ---
+  duration_ms: 23.943705
+  type: 'test'
+  ...
+# Subtest: SSE rejects server access errors and malformed snapshots
+ok 21 - SSE rejects server access errors and malformed snapshots
+  ---
+  duration_ms: 2.06181
+  type: 'test'
+  ...
+# Subtest: 401 clears session token and emits auth-expired
+ok 22 - 401 clears session token and emits auth-expired
+  ---
+  duration_ms: 0.752744
+  type: 'test'
+  ...
+# Subtest: fetch abort is propagated without changing server run state
+ok 23 - fetch abort is propagated without changing server run state
+  ---
+  duration_ms: 0.416799
+  type: 'test'
+  ...
+# Subtest: authenticated API wrapper preserves validation errors and 204
+ok 24 - authenticated API wrapper preserves validation errors and 204
+  ---
+  duration_ms: 1.18192
+  type: 'test'
+  ...
+# Subtest: only terminal server statuses stop watching
+ok 25 - only terminal server statuses stop watching
+  ---
+  duration_ms: 0.16892
+  type: 'test'
+  ...
+1..25
+# tests 25
+# suites 0
+# pass 25
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 121.202504

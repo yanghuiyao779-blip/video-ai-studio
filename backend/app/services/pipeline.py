@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.db.models import Job
+from app.db.models import Job, User
 from app.db.session import SessionLocal
 from app.services.asr import transcribe
 from app.services.domain import Transcript, TranscriptSegment
@@ -84,6 +84,8 @@ def process_job(job_id: str) -> None:
         if job.status == "cancel_requested":
             _mark_cancelled(job_id)
             return
+        owner = db.get(User, job.owner_id) if job.owner_id else None
+        allow_server_credentials = bool(owner and owner.username == settings.admin_username)
         source_url = job.source_url
         source_type = job.source_type or "url"
         source_path = job.source_path
@@ -155,7 +157,7 @@ def process_job(job_id: str) -> None:
                 update_job(db, job_id, platform=platform)
 
             progress(8, "downloading")
-            download = VideoDownloader(progress=progress).download(source_url, work_dir)
+            download = VideoDownloader(progress=progress, allow_server_credentials=allow_server_credentials).download(source_url, work_dir)
             media_path = download.file_path
             title = download.title
             download_metadata = download.metadata
@@ -166,6 +168,9 @@ def process_job(job_id: str) -> None:
                     title=download.title,
                     metadata_json=json.dumps(download.metadata, ensure_ascii=False),
                 )
+
+        from app.services.assistant_tools import capture_video_frames
+        capture_video_frames(job_id, media_path)
 
         progress(34, "extracting_audio")
         audio_path = extract_audio(media_path, work_dir / "audio.wav")
